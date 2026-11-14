@@ -12,6 +12,10 @@ from route_cost import analyze_route
 from terrain import Terrain
 from gale_dem import GaleTerrain
 from visit_route import plan_visit_route
+from monitoreo import Sesion, preparar_ruta
+from consumption import DEFAULT_SPEED_KMH
+import threading
+import uuid
 
 
 TERRAIN = Terrain()
@@ -51,6 +55,71 @@ def analyze_gale(payload):
         segment["to"] = GALE.to_lonlat(*segment["to"])
     result["coordinates"] = "Mars longitude/latitude, degrees east/north"
     return result
+
+
+# Rutas planeadas que el monitoreo puede seguir, por idRuta. Viven en memoria:
+# si el servicio se reinicia, las caminatas en curso se pierden.
+RUTAS = {}
+SESIONES = {}
+BLOQUEO = threading.Lock()
+
+
+class RutaDesconocida(LookupError):
+    pass
+
+
+def _numero(value, name):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
+        raise ValueError(f"{name} debe ser un número finito")
+    return float(value)
+
+
+def guardar_ruta(result, payload):
+    """Guarda la ruta de /plan para monitorearla. Devuelve su idRuta, o None si no hay ruta."""
+    if not result.get("legs") or not result.get("return_to_arrival", True):
+        return None
+    settings = payload.get("settings") or {}
+    velocidad = settings.get("speed_kmh", DEFAULT_SPEED_KMH) if isinstance(settings, dict) else DEFAULT_SPEED_KMH
+    if result["map"] == "gale":
+        to_plane = lambda p: GALE.to_xy(p[0], p[1])
+    else:
+        to_plane = lambda p: (p[0], p[1])
+    ruta = preparar_ruta(result, to_plane)
+    id_ruta = uuid.uuid4().hex[:12]
+    with BLOQUEO:
+        RUTAS[id_ruta] = {"ruta": ruta, "map": result["map"], "velocidad_kmh": velocidad}
+    return id_ruta
+
+
+def monitorear(payload):
+    """POST /api/monitoreo: una lectura por segundo de la caminata."""
+    id_ruta = payload.get("idRuta")
+    if not isinstance(id_ruta, str) or not id_ruta:
+        raise ValueError("idRuta es obligatorio")
+    t = _numero(payload.get("t"), "t")
+    if t < 0:
+        raise ValueError("t no puede ser negativo")
+    posicion = payload.get("posicion")
+    if not isinstance(posicion, dict):
+        raise ValueError("posicion debe ser un objeto")
+    with BLOQUEO:
+        if id_ruta not in RUTAS:
+            raise RutaDesconocida("idRuta desconocido")
+        entrada = RUTAS[id_ruta]
+        if entrada["map"] == "gale":
+            lon = _numero(posicion.get("lon"), "posicion.lon")
+            lat = _numero(posicion.get("lat"), "posicion.lat")
+            xmin, ymin, xmax, ymax = GALE.geo_bounds
+            if not (xmin <= lon <= xmax and ymin <= lat <= ymax):
+                raise ValueError("posicion está fuera de la cobertura del DEM de Gale")
+            p = GALE.to_xy(lon, lat)
+        else:
+            p = (_numero(posicion.get("x"), "posicion.x"), _numero(posicion.get("y"), "posicion.y"))
+        sesion = SESIONES.get(id_ruta)
+        if sesion is None:
+            sesion = SESIONES[id_ruta] = Sesion(entrada["ruta"], entrada["velocidad_kmh"])
+        lectura = sesion.lectura(t, p)
+    return {"idRuta": id_ruta, **lectura}
 
 
 def plan_request(payload):
@@ -180,7 +249,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_data(404, {"error": "Ruta desconocida"})
 
     def do_POST(self):
-        if self.path not in ("/analyze", "/gale/analyze", "/plan"):
+        if self.path not in ("/analyze", "/gale/analyze", "/plan", "/api/monitoreo"):
             self.send_data(404, {"error": "Ruta desconocida"})
             return
         try:
@@ -190,13 +259,18 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length))
             if not isinstance(payload, dict):
                 raise ValueError("Se esperaba un objeto JSON")
-            if self.path == "/plan":
+            if self.path == "/api/monitoreo":
+                result = monitorear(payload)
+            elif self.path == "/plan":
                 result = plan_request(payload)
+                result["idRuta"] = guardar_ruta(result, payload)
             elif self.path == "/gale/analyze":
                 result = analyze_gale(payload)
             else:
                 result = analyze_route(payload, TERRAIN)
             self.send_data(200, result)
+        except RutaDesconocida as exc:
+            self.send_data(404, {"error": str(exc)})
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self.send_data(400, {"error": str(exc)})
 

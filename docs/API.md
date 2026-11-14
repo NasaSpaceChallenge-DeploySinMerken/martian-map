@@ -171,7 +171,11 @@ curl -s -X POST http://localhost:3000/api/plan \
 
 ### Respuesta
 
-Se devuelve **tal cual** la del análisis (mismo status y body). Un `200` puede
+Se devuelve **tal cual** la del análisis (mismo status y body). Desde la versión
+con monitoreo, la respuesta incluye además `idRuta`: el identificador que se usa
+en [`POST /api/monitoreo`](#post-apimonitoreo--seguimiento-en-tiempo-real-equipo-3).
+Es `null` si la ruta no se puede monitorear (no vuelve al aterrizaje o no tiene tramos).
+Un `200` puede
 incluir visitas excluidas; no es un error:
 
 ```json
@@ -329,6 +333,91 @@ curl -s -X POST http://localhost:3000/api/routes/rt_mc3x9k_ab12cd/forward
 ```
 
 ---
+
+## POST /api/monitoreo — seguimiento en tiempo real (Equipo 3)
+
+Se llama **cada segundo** durante la caminata. El análisis calcula el oxígeno
+con su modelo (no usa el sensor del traje), ubica al astronauta en la ruta y
+devuelve las alertas activas.
+
+> **Por confirmar:** si esta llamada va directo al servidor de análisis o pasa
+> por el proxy `server/index.js` (ver `POST /api/plan`). Hoy se documenta como
+> llamada directa.
+
+### Pedido
+
+```json
+{
+  "idRuta": "4b889fa998d8",
+  "t": 3600,
+  "posicion": { "lon": 137.4150, "lat": -4.6223 },
+  "sensores": { "oxigenoPct": 61.5 }
+}
+```
+
+- `idRuta`: el que devolvió `/plan`. Si no existe, responde `404`.
+- `t`: segundos desde el inicio de la caminata (tiempo de la misión, no del reloj).
+  No puede ser negativo ni retroceder entre lecturas (`400`). Si la demo va
+  acelerada, se manda `t` en segundos de misión.
+- `posicion`: en Gale, `{ "lon", "lat" }` en grados. En el mapa de demo,
+  `{ "x", "y" }` en metros. Fuera de la cobertura del DEM responde `400`.
+- `sensores`: se aceptan pero **no se usan** por ahora. El oxígeno se calcula en
+  el análisis. Temperatura y pulso se verán en la fase 2.
+
+### Respuesta `200`
+
+```json
+{
+  "idRuta": "4b889fa998d8",
+  "t": 3600,
+  "oxigenoPct": 77.2,
+  "oxigenoRestanteG": 540.6,
+  "oxigenoGastadoG": 159.4,
+  "costoRegresoG": 36.5,
+  "costoDesvioG": 0.0,
+  "reservaG": 85.8,
+  "parado": false,
+  "distanciaARutaM": 0.0,
+  "alertas": [
+    { "id": "oxigeno-info", "nivel": "info", "mensaje": "Conviene revisar el oxígeno y la ruta de regreso" }
+  ]
+}
+```
+
+Los valores son un ejemplo.
+
+- `oxigenoPct`: oxígeno restante en porcentaje del tanque (700 g = 100 %).
+- `costoRegresoG`: oxígeno para volver al aterrizaje, incluido el costo de
+  regresar a la ruta si el astronauta se salió (`costoDesvioG`).
+- `reservaG`: 1 hora de consumo (85.8 g).
+- `parado`: `true` si no se alejó más de 3 m del punto donde se detuvo durante 10 s.
+- `distanciaARutaM`: qué tan lejos está de la ruta planeada.
+
+### Alertas
+
+Son **todas las activas**, cada una con un `id` fijo. Como los niveles se anidan,
+cuando el oxígeno está muy bajo llegan varias a la vez: el front debe mostrarlas
+todas. Con `R` = costo de volver y `X` = reserva:
+
+| `id` | `nivel` | Se activa cuando el oxígeno restante es menor que |
+|---|---|---|
+| `oxigeno-info` | `info` | `X + 2 × R` |
+| `oxigeno-aviso` | `aviso` | `X + 1.10 × R` |
+| `oxigeno-retorno` | `critico` | `R` (no alcanza ni para volver) |
+
+### Errores
+
+| HTTP | Cuándo |
+|---|---|
+| `400` | Falta un campo, `t` negativo o retrocede, posición fuera del DEM de Gale |
+| `404` | `idRuta` desconocido (la ruta no existe o el servidor se reinició) |
+
+### Notas
+
+- Las rutas y las sesiones de caminata se guardan **en memoria**. Si el servicio
+  se reinicia, las caminatas en curso se pierden y hay que volver a planear.
+- Los supuestos del oxígeno (tasa base de 1.43 g/min, paradas a la misma tasa,
+  bajadas planas) están documentados en `analysis/consumption.py`.
 
 ## Configuración del servidor
 

@@ -1,0 +1,19 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "ruta", "status": "preliminar" },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [137.4417, -4.5895],
+          [137.45, -4.60],
+          [137.47, -4.61],
+          [137.49, -4.625],
+          [137.505, -4.64]
+        ]
+      }
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 import unittest
 from io import BytesIO
 import json
+from math import radians, tan
 from unittest.mock import patch
 
 from visit_route import plan_visit_route
@@ -43,15 +44,31 @@ class VisitRouteTests(unittest.TestCase):
             mode = "test"
 
             def elevation(self, x, y):
-                return x * 0.28
+                return x * tan(radians(18.5))
 
             def roughness(self, x, y):
                 return 0
 
         result = plan_visit_route([100, 0.05], [[200, 0.05]], SteepNarrowTerrain())
-        self.assertEqual(result["grade_limit_percent"], 30)
+        self.assertEqual(result["grade_limit_degrees"], 19)
+        self.assertAlmostEqual(result["grade_limit_percent"], 34.4, places=1)
         self.assertIn("25 %", result["warning"])
         self.assertIn("pendiente fuerte", result["legs"][0]["hazards"])
+
+    def test_slope_above_19_degrees_is_not_accepted(self):
+        class SteepNarrowTerrain:
+            bounds = (0, 0, 1000, 0.1)
+            sample_spacing_m = 10
+            mode = "test"
+
+            def elevation(self, x, y):
+                return x * tan(radians(19.5))
+
+            def roughness(self, x, y):
+                return 0
+
+        with self.assertRaisesRegex(ValueError, "19°"):
+            plan_visit_route([100, 0.05], [[200, 0.05]], SteepNarrowTerrain())
 
     def test_terrain_barrier_changes_geometry(self):
         class BarrierTerrain(FlatTerrain):

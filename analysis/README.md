@@ -23,9 +23,9 @@ El servicio escucha en `http://127.0.0.1:8000`. Sin un DEM local, `map: "terrain
 }
 ```
 
-La respuesta incluye `ordered_visits` con los índices originales, `route` con la geometría completa, `legs` con distancia y tiempo por tramo, y `summary` con los totales. `grade_limit_percent` indica el límite usado y `warning` señala los recorridos con pendientes superiores al 25 %.
+La respuesta incluye `ordered_visits` con los índices originales, `route` con la geometría completa, `legs` con distancia y tiempo por tramo, y `summary` con los totales. `grade_limit_degrees` y `grade_limit_percent` indican el límite usado; `warning` señala los recorridos con pendientes superiores al 25 %.
 
-El planificador busca caminos aproximados sobre el DEM con A* y minimiza la distancia entre visitas sobre esos caminos. Usa un límite exploratorio de pendiente del 30 %, evita celdas sin elevación y rugosidad de 5 m o más. Ninguno de esos umbrales es un criterio de transitabilidad validado. Para cuatro o más ubicaciones de Gale, calcula pares de puntos en hasta ocho procesos.
+El planificador busca caminos aproximados sobre el DEM con A* y minimiza la distancia entre visitas sobre esos caminos. Usa un límite exploratorio de pendiente de 19° (aproximadamente 34,4 %), evita celdas sin elevación y rugosidad de 5 m o más. Ninguno de esos umbrales es un criterio de transitabilidad validado. Para cuatro o más ubicaciones de Gale, calcula pares de puntos en hasta ocho procesos.
 
 Los endpoints anteriores `POST /gale/analyze` y `POST /analyze` siguen disponibles para analizar puntos en un orden dado.
 

@@ -1,6 +1,6 @@
 """Plan a shortest-distance tour through unordered locations on one terrain."""
 
-from math import hypot, isfinite
+from math import hypot, isfinite, radians, tan
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from threading import Lock
@@ -11,6 +11,8 @@ from route_cost import profile_path
 
 
 MAX_VISITS = 8
+MAX_PLAN_SLOPE_DEGREES = 19
+MAX_PLAN_GRADE = tan(radians(MAX_PLAN_SLOPE_DEGREES))
 _GALE_WORKER = None
 _POOLS = {}
 _POOL_LOCK = Lock()
@@ -25,10 +27,7 @@ def _init_gale_worker(path):
 def _gale_pair(task):
     i, j, start, end, grade = task
     try:
-        if grade == 0.25:
-            path, _ = shortest_return(start, end, _GALE_WORKER, [start, end])
-        else:
-            path, _ = shortest_return(start, end, _GALE_WORKER, [start, end], max_grade=grade)
+        path, _ = shortest_return(start, end, _GALE_WORKER, [start, end], max_grade=grade)
         return i, j, path
     except ValueError:
         return i, j, None
@@ -105,12 +104,8 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
         def serial():
             for i, j in pairs:
                 try:
-                    if grade == 0.25:
-                        path, _ = shortest_return(locations[i], locations[j], terrain,
-                                                  [locations[i], locations[j]])
-                    else:
-                        path, _ = shortest_return(locations[i], locations[j], terrain,
-                                                  [locations[i], locations[j]], max_grade=grade)
+                    path, _ = shortest_return(locations[i], locations[j], terrain,
+                                              [locations[i], locations[j]], max_grade=grade)
                     yield i, j, path
                 except ValueError:
                     yield i, j, None
@@ -133,10 +128,10 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
             paths[j, i] = list(reversed(path))
             distances[i, j] = distances[j, i] = length
 
-    # The planning endpoint uses one exploratory 30% grade limit. A 25% pass
-    # followed by a 30% retry doubled work on hard terrain without improving
+    # The planning endpoint uses one exploratory 19-degree slope limit. A 25%
+    # pass followed by a higher-limit retry doubled work without improving
     # the distance objective; steep segments are disclosed in the response.
-    add_pairs([(i, j) for i in range(count) for j in range(i + 1, count)], 0.30)
+    add_pairs([(i, j) for i in range(count) for j in range(i + 1, count)], MAX_PLAN_GRADE)
 
     n = count - 1
 
@@ -195,7 +190,7 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
     if order is None:
         missing = [str(i) for i in range(1, count) if (0, i) not in distances]
         detail = f" Sin conexión encontrada desde el aterrizaje hasta: punto(s) {', '.join(missing)}." if missing else ""
-        raise ValueError("No se encontró una ruta para todos los puntos con el límite de pendiente de 30 %." + detail)
+        raise ValueError(f"No se encontró una ruta para todos los puntos con el límite de pendiente de {MAX_PLAN_SLOPE_DEGREES}°." + detail)
 
     indices = [0] + order + ([0] if return_to_arrival else [])
     route = [locations[0]]
@@ -237,7 +232,8 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
         "arrival": locations[0],
         "ordered_visits": [{"input_index": index - 1, "point": locations[index]} for index in encountered],
         "return_to_arrival": return_to_arrival,
-        "grade_limit_percent": 30,
+        "grade_limit_degrees": MAX_PLAN_SLOPE_DEGREES,
+        "grade_limit_percent": round(MAX_PLAN_GRADE * 100, 1),
         "warning": ("Ruta exploratoria: incluye pendientes superiores al 25 %. "
                     "Revisa la viabilidad de esos tramos sobre el DEM."
                     if steep else None),

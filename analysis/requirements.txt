@@ -1,0 +1,4 @@
+# Lectura del DEM local de Gale y generación de vistas CTX.
+Pillow>=11,<13
+# Opcional, solo para usar MARTIAN_DEM con otro GeoTIFF proyectado:
+# rasterio>=1.4,<2

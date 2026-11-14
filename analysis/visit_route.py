@@ -8,6 +8,7 @@ import os
 
 from return_route import shortest_return
 from route_cost import profile_path
+from consumption import oxygen_budget
 
 
 MAX_VISITS = 8
@@ -222,10 +223,13 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
             "path": path,
             "distance_m": round(sum(segment["distance_m"] for segment in segments), 1),
             "time_min": round(sum(segment["time_min"] for segment in segments), 1),
+            "oxygen_g": round(sum(segment["oxygen_g"] for segment in segments), 1),
             "hazards": sorted({hazard for segment in segments for hazard in segment["hazards"]}),
         })
     travel_min = sum(leg["time_min"] for leg in legs)
     stop_min = n * stop_minutes_per_visit
+    oxygen = oxygen_budget(
+        [{"oxygen_g": leg["oxygen_g"]} for leg in legs], stop_minutes=stop_min)
     steep = any("pendiente fuerte" in leg["hazards"] for leg in legs)
     return {
         "terrain_mode": terrain.mode,
@@ -244,6 +248,7 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
             "travel_time_min": round(travel_min, 1),
             "stop_time_min": round(stop_min, 1),
             "total_time_min": round(travel_min + stop_min, 1),
+            "oxygen": oxygen,
         },
         "method": "distancia mínima entre visitas sobre caminos transitables aproximados por malla A*",
     }

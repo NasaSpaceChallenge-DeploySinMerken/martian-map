@@ -36,6 +36,19 @@ class VisitRouteTests(unittest.TestCase):
         self.assertEqual(result["summary"]["distance_m"], 500)
         self.assertEqual(result["summary"]["stop_time_min"], 10)
         self.assertEqual({item["input_index"] for item in result["ordered_visits"]}, {0, 1})
+        oxygen = result["summary"]["oxygen"]
+        self.assertEqual(oxygen["stops_g"], 14.3)
+        self.assertAlmostEqual(oxygen["travel_g"],
+                               sum(leg["oxygen_g"] for leg in result["legs"]), delta=0.1)
+        self.assertAlmostEqual(oxygen["used_g"], oxygen["travel_g"] + oxygen["stops_g"],
+                               delta=0.1)
+
+    def test_budget_warns_when_tank_cannot_cover_route_and_reserve(self):
+        result = plan_visit_route([50, 50], [[900, 50]], FlatTerrain(),
+                                  speed_kmh=0.3, stop_minutes_per_visit=180)
+        oxygen = result["summary"]["oxygen"]
+        self.assertFalse(oxygen["enough_with_reserve"])
+        self.assertLess(oxygen["remaining_g"], oxygen["reserve_g"])
 
     def test_steep_route_is_explicitly_flagged(self):
         class SteepNarrowTerrain:
@@ -127,6 +140,8 @@ class VisitRouteTests(unittest.TestCase):
         self.assertEqual(sent["status"], 200)
         self.assertEqual(sent["data"]["map"], "gale")
         self.assertEqual(sent["data"]["route"][0], payload["arrival"])
+        self.assertIn("oxygen_g", sent["data"]["legs"][0])
+        self.assertIn("enough_with_reserve", sent["data"]["summary"]["oxygen"])
 
     def test_full_ctx_map_is_rejected_without_dem(self):
         with self.assertRaisesRegex(ValueError, "CTX completo"):

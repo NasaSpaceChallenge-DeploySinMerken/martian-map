@@ -4,6 +4,7 @@ from math import ceil, hypot, isfinite
 
 from slope import segment_metrics
 from return_route import shortest_return
+from consumption import segment_o2_g, oxygen_budget
 
 
 def _number(value, name, minimum, maximum):
@@ -24,7 +25,7 @@ def profile_path(path, terrain, speed_kmh, direction):
         # Long traverses remain analyzable. Bound work per leg and report
         # the resulting interval so a coarser sample is never hidden.
         count = min(ceil(distance / max(terrain.sample_spacing_m, 10)), 5000)
-        hours = total_rise = max_grade = max_roughness = 0.0
+        hours = total_rise = max_grade = max_roughness = oxygen_g = 0.0
         hazards = set()
         for index in range(count):
             start = [a[j] + (b[j] - a[j]) * index / count for j in (0, 1)]
@@ -40,6 +41,7 @@ def profile_path(path, terrain, speed_kmh, direction):
             speed_mph = speed_kmh * 1000 / slowdown
             dt = metrics["distance_m"] / speed_mph
             hours += dt
+            oxygen_g += segment_o2_g(dt * 60, grade * 100, speed_kmh=speed_kmh)
             total_rise += metrics["rise_m"]
             max_grade = max(max_grade, abs(grade))
             max_roughness = max(max_roughness, roughness)
@@ -53,7 +55,8 @@ def profile_path(path, terrain, speed_kmh, direction):
             "sample_interval_m": round(distance / count, 1),
             "max_grade_percent": round(max_grade * 100, 1),
             "roughness_m": round(max_roughness, 1),
-            "time_min": round(hours * 60, 1), "hazards": sorted(hazards),
+            "time_min": round(hours * 60, 1), "oxygen_g": round(oxygen_g, 3),
+            "hazards": sorted(hazards),
         })
     return output
 
@@ -83,6 +86,7 @@ def analyze_route(payload, terrain):
     segments = outward + returning
     distance_m = sum(item["distance_m"] for item in segments)
     time_min = sum(item["time_min"] for item in segments) + stop_minutes
+    oxygen = oxygen_budget(segments, stop_minutes=stop_minutes)
     return {
         "terrain_mode": terrain.mode,
         "return_route": return_route,
@@ -93,6 +97,7 @@ def analyze_route(payload, terrain):
             "outbound_distance_m": round(sum(item["distance_m"] for item in outward), 1),
             "return_distance_m": round(sum(item["distance_m"] for item in returning), 1),
             "hazard_count": sum(bool(item["hazards"]) for item in segments),
+            "oxygen": oxygen,
         },
         "assumptions": {
             "speed_kmh": speed_kmh, "stop_minutes": stop_minutes,

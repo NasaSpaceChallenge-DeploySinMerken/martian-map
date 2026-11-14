@@ -29,6 +29,12 @@ El planificador busca caminos aproximados sobre el DEM con A* y minimiza la dist
 
 Los endpoints anteriores `POST /gale/analyze` y `POST /analyze` siguen disponibles para analizar puntos en un orden dado.
 
+## Oxígeno estimado
+
+El cálculo de `analysis/consumption.py`, incorporado desde la rama `feature/ingrid-consumo`, se aplica **después** de elegir la ruta. No altera el camino de menor distancia. `legs[].oxygen_g` representa solo caminata; `summary.oxygen` incluye caminata, paradas, consumo total, tanque restante y si alcanza la reserva.
+
+Cada muestra del DEM conserva el signo de la pendiente: las subidas aplican el factor ACSM del modelo de Ingrid y las bajadas se tratan como terreno plano para oxígeno. Los valores iniciales son **1,43 g/min** en plano, **700 g** de tanque y **60 min** de reserva; las paradas usan la misma tasa base. Son supuestos exploratorios del borrador de Ingrid, no una predicción fisiológica validada para una EVA en Marte. Una ruta que excede el presupuesto se devuelve igualmente, con `summary.oxygen.enough_with_reserve: false`.
+
 ## Pruebas
 
 ```sh

@@ -1,6 +1,6 @@
 import unittest
 
-from route_cost import analyze_route
+from route_cost import analyze_route, profile_path
 from return_route import shortest_return
 class FlatTerrain:
     bounds = (0, 0, 1000, 1000)
@@ -82,6 +82,13 @@ class RouteCostTests(unittest.TestCase):
         self.assertEqual(result["return_route"][-1], points[0])
         self.assertLess(result["summary"]["return_distance_m"],
                         result["summary"]["outbound_distance_m"])
+
+    def test_downhill_oxygen_uses_signed_grade(self):
+        uphill = profile_path([[100, 100], [200, 100]], FlatTerrain(), 2.5, "ida")[0]
+        downhill = profile_path([[200, 100], [100, 100]], FlatTerrain(), 2.5, "regreso")[0]
+        self.assertGreater(uphill["oxygen_g"], downhill["oxygen_g"])
+        self.assertAlmostEqual(downhill["oxygen_g"], downhill["time_min"] * 1.43,
+                               delta=0.1)
 
     def test_search_expands_when_detour_is_outside_local_window(self):
         class LongBarrier:

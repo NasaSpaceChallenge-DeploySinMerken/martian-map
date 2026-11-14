@@ -75,7 +75,7 @@ def split_visits_by_oxygen(visit_indices, paths, distances, terrain, speed_kmh,
     candidates = [(mask, partition(mask)) for mask in range(full_mask + 1)]
     covered_mask, choice = min(
         ((mask, result) for mask, result in candidates if result is not None),
-        key=lambda item: (-item[0].bit_count(), item[1][0], item[1][1], item[1][2]),
+        key=lambda item: (-bin(item[0]).count("1"), item[1][0], item[1][1], item[1][2]),
     )
     excluded = [index for index in visit_indices if not covered_mask & bit_by_index[index]]
     return [list(feasible[mask][2]) for mask in choice[2]], excluded

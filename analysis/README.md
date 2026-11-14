@@ -7,7 +7,13 @@ python -m pip install -r analysis/requirements.txt
 python analysis/server.py
 ```
 
-El servicio escucha en `http://127.0.0.1:8000`. Sin un DEM local, `map: "terrain"` usa un terreno sintético. Para Gale necesita `Gale_DEM_SMG_1m.tif` en el directorio padre del repositorio; el GeoTIFF no forma parte de esta rama.
+El servicio escucha en el puerto `PORT` de Railway, o en `MARTIAN_API_PORT` (8000 por defecto), sobre `0.0.0.0`. Sin un DEM local, `map: "terrain"` usa un terreno sintético. Para Gale necesita `Gale_DEM_SMG_1m.tif` en el directorio padre del repositorio o en la ruta indicada por `GALE_DEM_PATH`; el GeoTIFF no forma parte de esta rama.
+
+## Railway
+
+Crear un servicio desde la rama `feat/javier/analisis`, con **Root Directory** `/analysis`, builder **Railpack**, **Start Command** `python server.py` y **Healthcheck Path** `/health`. Railpack instala `analysis/requirements.txt` al tomar esa carpeta como raíz. No se necesita definir `PORT`: Railway lo proporciona. Generar un dominio público en **Networking → Public Networking** para llamar a `/plan` por HTTPS.
+
+Para usar Gale, adjuntar un volumen con montaje `/data`, cargar `Gale_DEM_SMG_1m.tif` en él y definir `GALE_DEM_PATH=/data/Gale_DEM_SMG_1m.tif`. El archivo original ocupa aproximadamente 5,78 GB (5,38 GiB): supera el volumen máximo del plan Hobby de 5 GB; requiere un volumen mayor o preparar un DEM recortado compatible con este lector. `MARTIAN_MAX_WORKERS=2` limita los procesos de búsqueda espacial si el servicio dispone de pocos CPU. Sin el DEM, `/gale/config` indica `available: false` y solo funciona el terreno de demostración. Si se configura `GALE_DEM_PATH` y el archivo falta, el servicio falla al iniciar para evitar un despliegue de Gale aparentemente correcto.
 
 ## Planificar visitas
 
@@ -31,7 +37,7 @@ Los endpoints anteriores `POST /gale/analyze` y `POST /analyze` siguen disponibl
 
 ## Oxígeno estimado
 
-El cálculo de `analysis/consumption.py`, incorporado desde la rama `feature/ingrid-consumo`, se aplica a los caminos encontrados. `legs[].oxygen_g` representa solo caminata; `summary.oxygen` incluye caminata, paradas, consumo total y reserva. Si una sola salida no conserva la reserva, se busca el mínimo número de salidas desde el aterrizaje y después la menor distancia total. Cada salida debe cubrir sus visitas, regresar y conservar la reserva. Si un punto no cabe ni en una salida individual, la solicitud devuelve un error con su índice.
+El cálculo de `analysis/consumption.py`, incorporado desde la rama `feature/ingrid-consumo`, se aplica a los caminos encontrados. `legs[].oxygen_g` representa solo caminata; `summary.oxygen` incluye caminata, paradas, consumo total y reserva. Si una sola salida no conserva la reserva, se busca cubrir el mayor número de visitas, luego el mínimo número de salidas desde el aterrizaje y después la menor distancia total. Cada salida debe cubrir sus visitas, regresar y conservar la reserva. Las visitas sin camino o sin oxígeno suficiente se devuelven en `unreachable_visits` junto con las rutas viables.
 
 Cada muestra del DEM conserva el signo de la pendiente: las subidas aplican el factor ACSM del modelo de Ingrid y las bajadas se tratan como terreno plano para oxígeno. Los valores iniciales son **1,43 g/min** en plano, **700 g** de tanque y **60 min** de reserva; las paradas usan la misma tasa base. Son supuestos exploratorios del borrador de Ingrid, no una predicción fisiológica validada para una EVA en Marte.
 

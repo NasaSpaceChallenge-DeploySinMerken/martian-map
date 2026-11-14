@@ -15,7 +15,10 @@ from visit_route import plan_visit_route
 
 
 TERRAIN = Terrain()
-GALE_PATH = Path(__file__).resolve().parents[2] / "Gale_DEM_SMG_1m.tif"
+GALE_PATH = Path(os.environ["GALE_DEM_PATH"]) if os.environ.get("GALE_DEM_PATH") else (
+    Path(__file__).resolve().parents[2] / "Gale_DEM_SMG_1m.tif")
+if os.environ.get("GALE_DEM_PATH") and not GALE_PATH.is_file():
+    raise RuntimeError(f"No se encontró el DEM de Gale en {GALE_PATH}")
 GALE = GaleTerrain(GALE_PATH) if GALE_PATH.exists() else None
 DATA_DIR = Path(__file__).resolve().parents[1] / "public" / "data"
 DATA_FILES = {
@@ -162,6 +165,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_data(200, path.read_bytes(), content_type)
             else:
                 self.send_data(404, {"error": f"Falta {name}"})
+        elif self.path == "/health":
+            self.send_data(200, {"status": "ok", "gale_available": GALE is not None})
         elif self.path == "/config":
             self.send_data(200, {"bounds": TERRAIN.bounds, "mode": TERRAIN.mode,
                                  "sample_spacing_m": TERRAIN.sample_spacing_m})
@@ -197,7 +202,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("MARTIAN_API_PORT", "8000"))
+    port = int(os.environ.get("PORT", os.environ.get("MARTIAN_API_PORT", "8000")))
+    host = os.environ.get("MARTIAN_API_HOST", "0.0.0.0")
     gale_status = "Gale DEM disponible" if GALE else "Gale DEM no encontrado"
-    print(f"Backend de análisis en http://localhost:{port} ({gale_status})", flush=True)
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    print(f"Backend de análisis en {host}:{port} ({gale_status})", flush=True)
+    ThreadingHTTPServer((host, port), Handler).serve_forever()

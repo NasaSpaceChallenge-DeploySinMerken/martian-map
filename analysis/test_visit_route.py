@@ -21,6 +21,17 @@ class FlatTerrain:
 
 
 class VisitRouteTests(unittest.TestCase):
+    def test_health_endpoint_reports_gale_availability(self):
+        handler = Handler.__new__(Handler)
+        handler.path = "/health"
+        sent = {}
+        handler.send_data = lambda status, data, content_type="application/json; charset=utf-8": sent.update(
+            status=status, data=data)
+        handler.do_GET()
+        self.assertEqual(sent["status"], 200)
+        self.assertEqual(sent["data"]["status"], "ok")
+        self.assertIn("gale_available", sent["data"])
+
     def test_unordered_visits_are_reordered_from_arrival(self):
         result = plan_visit_route([0, 100], [[300, 100], [100, 100], [200, 100]],
                                   FlatTerrain(), return_to_arrival=False)

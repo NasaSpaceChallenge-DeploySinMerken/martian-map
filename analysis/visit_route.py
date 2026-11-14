@@ -39,7 +39,8 @@ def _gale_pool(terrain):
     path = str(terrain.path)
     with _POOL_LOCK:
         if path not in _POOLS:
-            workers = min(8, os.cpu_count() or 1)
+            workers = max(1, min(8, int(os.environ.get("MARTIAN_MAX_WORKERS", "8")),
+                                 os.cpu_count() or 1))
             _POOLS[path] = ProcessPoolExecutor(max_workers=workers,
                                                initializer=_init_gale_worker,
                                                initargs=(path,))

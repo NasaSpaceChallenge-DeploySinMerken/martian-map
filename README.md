@@ -20,26 +20,31 @@ equipos — contrato completo con ejemplos en [`docs/API.md`](docs/API.md):
 
 ```
 Equipo 2 (front) → GET /api/space + /api/layers  (muestra la zona y las capas)
-Equipo 2 (front) → POST /api/routes {start, route}
-     nosotros validamos que todo esté en nuestro espacio (zona + dato de
-     elevación) → si va bien, lo enviamos al Equipo 3 (TEAM3_ANALYSIS_URL)
-Equipo 3 → POST /api/routes/:id/analysis (callback) o responde sincrónicamente
-Equipo 2 (front) → GET /api/routes/:id  (estado: validated → forwarded → analyzed)
+Equipo 2 (front) → POST /api/plan {arrival, visits, settings}
+     nosotros no validamos: reenviamos el body al POST /plan del Equipo 3
+     (ANALYSIS_URL) y devolvemos su status + JSON tal cual (route, legs, trips…)
 ```
 
-- **Rango válido (el que pide el equipo de análisis)**: lon `137.122471` –
-  `137.729813` °, lat `−4.925474` – `−4.248963` °. Lo que caiga fuera da
-  `422 OUT_OF_SPACE` (con los índices de los puntos y el punto exacto por donde
-  se sale el tramo) y lo que esté sobre nodata da `422 NO_DATA` (se comprueba
-  el relieve de los vértices **y de los tramos**, muestreados cada ~250 m).
-  El front puede leerlo de `GET /api/space` (`bounds` / `range`) y dibujarlo:
-  en el mapa aparece la capa **“Área válida (análisis)”**.
+- **Flujo recomendado (`/api/plan`)**: acepta el contrato del análisis
+  (`map`, `arrival`, `visits`, `return_to_arrival`, `settings`) o el anterior
+  `{start, route}`, que se normaliza a `arrival`/`visits`. No valida rango ni
+  nodata: `200` puede traer `unreachable_visits` y los `4xx` del análisis se
+  reenvían sin tocar. El front transforma la respuesta para dibujarla.
+- **Flujo anterior (`/api/routes`)**: se mantiene para no romper integraciones.
+  Valida el rango y el nodata, registra la ruta y la reenvía al Equipo 3.
+  Rango válido: lon `137.122471` – `137.729813` °, lat `−4.925474` –
+  `−4.248963` °. Lo que caiga fuera da `422 OUT_OF_SPACE` y lo que esté sobre
+  nodata da `422 NO_DATA`. El front puede leerlo de `GET /api/space`
+  (`bounds` / `range`) y dibujarlo: en el mapa aparece la capa
+  **“Área válida (análisis)”**.
 - **Capas**: el catálogo vive en `src/map/catalog.js` (compartido por el mapa y
   la API); para sumar una capa nueva (p. ej. temperatura) basta añadir su
   entrada con su COG en `public/data/`.
-- Config: `PORT`, `MAP_ORIGIN`, `TEAM3_ANALYSIS_URL`, `PUBLIC_ORIGIN`
-  (ver tabla en `docs/API.md`). Sin `TEAM3_ANALYSIS_URL` las rutas quedan en
-  `validated` y se reenvían luego con `POST /api/routes/:id/forward`.
+- Config: `PORT`, `MAP_ORIGIN`, `ANALYSIS_URL`, `ANALYSIS_TIMEOUT_MS`,
+  `TEAM3_ANALYSIS_URL`, `PUBLIC_ORIGIN` (ver tabla en `docs/API.md`). Sin
+  `ANALYSIS_URL`, `/api/plan` responde `503 NO_ANALYSIS_TARGET`. Sin
+  `TEAM3_ANALYSIS_URL`, las rutas del flujo anterior quedan en `validated` y
+  se reenvían luego con `POST /api/routes/:id/forward`.
 - La elevación que devuelve la API se muestrea del mismo `dem_cog.tif` que el
   mapa: valores idénticos a los del cursor.
 

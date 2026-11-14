@@ -2,6 +2,24 @@
 
 Servidor: `server/index.js` → `npm run api` (puerto **3000** por defecto).
 
+## Flujo recomendado: `POST /api/plan`
+
+```
+Equipo 2 (front)                 Equipo 1 (nosotros, capas)            Equipo 3 (análisis)
+      │                                    │                                  │
+      │  POST /api/plan {arrival, visits}  │                                  │
+      │  ────────────────────────────────► │  POST /plan (mismo body) ──────► │
+      │                                    │                                  │
+      │  200/4xx con el JSON del análisis  │  ◄──────────────────────────────  │
+      │  ◄───────────────────────────────  │   (se reenvía tal cual)          │
+```
+
+No validamos rango ni nodata: el Equipo 3 decide qué visitas son viables y
+nosotros devolvemos su respuesta sin transformarla. El front se encarga de
+interpretar `route`, `legs`, `ordered_visits`, `unreachable_visits`, etc.
+
+## Flujo anterior (se mantiene): `/api/routes`
+
 ```
 Equipo 2 (front)                 Equipo 1 (nosotros, capas)            Equipo 3 (análisis)
       │                                    │                                  │
@@ -32,16 +50,18 @@ curl -s http://localhost:3000/api/health
 ```
 
 ```json
-{ "ok": true, "time": "...", "routes": 0, "analysisTarget": null }
+{ "ok": true, "time": "...", "routes": 0, "analysisTarget": null, "planTarget": null }
 ```
 
 ## GET /api/space — "la zona que tenemos cargada"
 
 Para que el front dibuje el área disponible antes de que el usuario elija puntos.
 
-> **`bounds` = el rango que acepta el modelo predictivo** (el que pide el equipo
-> de análisis): lon `137.122471` – `137.729813` °, lat `−4.925474` – `−4.248963` °.
-> Un punto fuera de ahí no entra al modelo, así que la API lo rechaza.
+> **`bounds` = el rango que valida el flujo anterior `/api/routes`**:
+> lon `137.122471` – `137.729813` °, lat `−4.925474` – `−4.248963` °.
+> Un punto fuera de ahí se rechaza con `422 OUT_OF_SPACE` **solo en ese flujo**.
+> Para `POST /api/plan` no recortes las visitas: el análisis las evalúa y las
+> que no sean viables aparecen en `unreachable_visits`.
 > `mapBounds` es la extensión de los tiles (la imagen llega un poco más allá).
 
 ```bash
@@ -104,6 +124,85 @@ curl -s http://localhost:3000/api/layers
 
 El `ramp` es `[metros, [r,g,b,a]]` para que el front pueda dibujar la leyenda
 de elevación igual que el mapa.
+
+## POST /api/plan — proxy transparente al análisis (Equipo 3)
+
+El front nos manda las coordenadas y nosotros se las pasamos al `POST /plan`
+del Equipo 3. **No validamos** el rango de Gale ni el nodata y **no
+transformamos la respuesta**: el front recibe el mismo HTTP status y el mismo
+JSON que devolvió el análisis.
+
+`ANALYSIS_URL` puede ser la base (`http://localhost:8000`) o la URL completa
+(`http://localhost:8000/plan`); si es la base se le añade `/plan`.
+`ANALYSIS_TIMEOUT_MS` (por defecto `60000`) limita la espera.
+
+### Formato del análisis (se reenvía sin tocar)
+
+```bash
+curl -s -X POST http://localhost:3000/api/plan \
+  -H 'content-type: application/json' \
+  -d '{
+    "map": "gale",
+    "arrival": [137.44, -4.59],
+    "visits": [[137.45, -4.582], [137.445, -4.588]],
+    "return_to_arrival": true,
+    "settings": {"speed_kmh": 2.5, "stop_minutes_per_visit": 5}
+  }'
+```
+
+### Formato anterior del front (se normaliza)
+
+Si el body trae `start`/`route` en vez de `arrival`/`visits`, lo convertimos
+antes de llamar al análisis:
+
+| Front (anterior) | `/plan` |
+|---|---|
+| `start` | `arrival` |
+| `route` | `visits` |
+| `return_to_arrival` (opcional) | igual |
+| `settings` (opcional) | igual |
+| — | `map: "gale"` por defecto |
+
+```bash
+curl -s -X POST http://localhost:3000/api/plan \
+  -H 'content-type: application/json' \
+  -d '{"start":[137.44,-4.59],"route":[[137.45,-4.582]],"settings":{"speed_kmh":2}}'
+```
+
+### Respuesta
+
+Se devuelve **tal cual** la del análisis (mismo status y body). Un `200` puede
+incluir visitas excluidas; no es un error:
+
+```json
+{
+  "map": "gale",
+  "coordinates": "lon/lat",
+  "arrival": [137.44, -4.59],
+  "ordered_visits": [{ "input_index": 0, "point": [137.45, -4.582] }],
+  "unreachable_visits": [],
+  "route": [[137.44, -4.59], [137.45, -4.582], [137.44, -4.59]],
+  "legs": [],
+  "summary": {},
+  "trip_count": 1,
+  "trips": []
+}
+```
+
+Los `4xx` de validación del análisis (por ejemplo, `map: "ctx"` o visitas
+fuera de rango) también se reenvían con su status y body originales.
+
+Errores **de nuestro proxy** (no del análisis):
+
+| HTTP | `code` | Cuándo |
+|---|---|---|
+| `503` | `NO_ANALYSIS_TARGET` | falta `ANALYSIS_URL` |
+| `502` | `ANALYSIS_UNAVAILABLE` | no se pudo contactar al análisis |
+| `502` | `BAD_UPSTREAM_RESPONSE` | respondió sin un JSON válido |
+| `504` | `ANALYSIS_TIMEOUT` | superó `ANALYSIS_TIMEOUT_MS` |
+
+> El flujo anterior `POST /api/routes` (validación de rango/nodata, store y
+> callbacks) sigue disponible más abajo para no romper integraciones.
 
 ## POST /api/routes — validar inicio + ruta (el paso nuestro)
 
@@ -238,7 +337,10 @@ curl -s -X POST http://localhost:3000/api/routes/rt_mc3x9k_ab12cd/forward
 | `PORT` | `3000` | puerto del API |
 | `MAP_ORIGIN` | `http://localhost:5173` | origen donde corre el mapa (vite dev o GitHub Pages) |
 | `MAP_BASE` | `/martian-map/` | base pública del mapa (igual que `vite.config.js`) |
-| `TEAM3_ANALYSIS_URL` | — | endpoint del Equipo 3; sin él, las rutas quedan `validated` |
+| `ANALYSIS_URL` | — | base o URL completa del `POST /plan` del Equipo 3 (ej. `http://localhost:8000`) |
+| `ANALYSIS_TIMEOUT_MS` | `60000` | timeout de `/api/plan` contra el Equipo 3 |
+| `PLAN_URL` | — | opcional: URL exacta del `/plan` (tiene prioridad sobre `ANALYSIS_URL`) |
+| `TEAM3_ANALYSIS_URL` | — | endpoint del flujo anterior `/api/routes`; sin él, las rutas quedan `validated` |
 | `PUBLIC_ORIGIN` | `http://localhost:3000` | origen público para el `callbackUrl` del Equipo 3 |
 
 Si existe `dist/` (`npm run build`), el servidor también sirve el mapa en

@@ -11,7 +11,8 @@
  *   GET  /api/health                 estado del servicio
  *   GET  /api/space                  nuestra "zona" para que el front la muestre
  *   GET  /api/layers                 catálogo de capas disponibles (elevación, imagen, ...)
- *   POST /api/routes                 validar inicio+ruta y registrarla (la envía al Equipo 3)
+ *   POST /api/plan                   proxy transparente al POST /plan del Equipo 3
+ *   POST /api/routes                 flujo anterior: validar inicio+ruta y registrarla
  *   GET  /api/routes                 lista de rutas registradas
  *   GET  /api/routes/:id             estado + resultado del análisis
  *   POST /api/routes/:id/analysis    el Equipo 3 deposita su resultado (callback)
@@ -19,7 +20,9 @@
  *
  * Configuración por entorno:
  *   PORT=3000  MAP_ORIGIN=http://localhost:5173  MAP_BASE=/martian-map/
- *   TEAM3_ANALYSIS_URL=https://.../analizar      (opcional; si no hay, la ruta queda "validated")
+ *   ANALYSIS_URL=https://...        base o URL completa del POST /plan (recomendado)
+ *   ANALYSIS_TIMEOUT_MS=60000       timeout de la llamada al Equipo 3
+ *   TEAM3_ANALYSIS_URL=https://.../analizar      (flujo anterior, opcional)
  *   PUBLIC_ORIGIN=http://localhost:3000          (origen publicado para los callbacks)
  */
 
@@ -51,6 +54,54 @@ const MAP_ORIGIN = process.env.MAP_ORIGIN || 'http://localhost:5173';
 const MAP_BASE = process.env.MAP_BASE || '/martian-map/';
 const TEAM3_URL = process.env.TEAM3_ANALYSIS_URL || null;
 const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || `http://localhost:${PORT}`;
+
+// --- Equipo 3 (análisis): POST /plan ---
+// ANALYSIS_URL puede ser la base (http://host:8000) o la URL completa del
+// endpoint (http://host:8000/plan). Si es la base, se le añade /plan.
+const ANALYSIS_URL = process.env.ANALYSIS_URL || null;
+const ANALYSIS_TIMEOUT_MS = Math.max(1000, Number(process.env.ANALYSIS_TIMEOUT_MS) || 60000);
+
+function resolvePlanUrl(raw) {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (!/\/plan\/?$/i.test(url.pathname)) {
+      url.pathname = `${url.pathname.replace(/\/+$/, '')}/plan`;
+    }
+    return url.toString();
+  } catch {
+    console.warn(`ANALYSIS_URL inválida: ${raw}`);
+    return null;
+  }
+}
+
+const PLAN_URL = process.env.PLAN_URL || resolvePlanUrl(ANALYSIS_URL);
+
+/**
+ * Acepta el contrato del análisis ({map, arrival, visits, ...}) o el formato
+ * anterior del front ({start, route}) y lo normaliza para POST /plan.
+ * Si ya viene en el formato del análisis no se toca ningún campo.
+ */
+function toPlanRequest(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+
+  const hasPlanFields = body.arrival !== undefined || body.visits !== undefined;
+  const hasLegacyFields = body.start !== undefined || body.route !== undefined;
+  // Formato del análisis puro: se reenvía sin tocar ningún campo.
+  if (hasPlanFields && !hasLegacyFields) return body;
+
+  // Formato anterior (o mezcla de ambos): se normaliza a lo que espera /plan.
+  const plan = { map: body.map ?? 'gale' };
+  const arrival = body.arrival ?? body.start;
+  const visits = body.visits ?? body.route;
+  if (arrival !== undefined) plan.arrival = arrival;
+  if (visits !== undefined) plan.visits = visits;
+
+  const roundtrip = body.return_to_arrival ?? body.returnToArrival;
+  if (roundtrip !== undefined) plan.return_to_arrival = roundtrip;
+  if (body.settings !== undefined) plan.settings = body.settings;
+  return plan;
+}
 
 // --- Conversión de coordenadas: grados (IAU:49900) -> metros (MARS:EQC) ---
 const llToEqc = proj4(MARS_LL_PROJ4, MARS_EQC_PROJ4);
@@ -231,6 +282,7 @@ app.get('/api/health', (req, res) => {
     time: new Date().toISOString(),
     routes: routes.size,
     analysisTarget: TEAM3_URL,
+    planTarget: PLAN_URL,
   });
 });
 
@@ -269,6 +321,71 @@ app.get('/api/layers', (req, res) => {
       absoluteUrl: `${MAP_ORIGIN}${base}/${l.url}`,
     })),
   });
+});
+
+// Proxy transparente al Equipo 3: POST /plan (visitas sin orden previo).
+// No validamos rango ni nodata: el análisis decide qué visitas son viables y
+// devolvemos su respuesta (status y JSON) tal cual para que el front la use.
+app.post('/api/plan', async (req, res) => {
+  if (!PLAN_URL) {
+    return res.status(503).json({
+      ok: false,
+      errors: [
+        {
+          code: 'NO_ANALYSIS_TARGET',
+          message:
+            'ANALYSIS_URL no está configurado en el servidor; no puedo pedir el plan al Equipo 3',
+        },
+      ],
+    });
+  }
+
+  const payload = toPlanRequest(req.body);
+  try {
+    const upstream = await fetch(PLAN_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload ?? {}),
+      signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
+    });
+
+    const text = await upstream.text();
+    let data;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {}
+
+    if (data !== null && typeof data === 'object') {
+      // Mismo status y mismo body que devolvió el Equipo 3 (200 con
+      // unreachable_visits incluido; también sus 4xx de validación).
+      return res.status(upstream.status).json(data);
+    }
+
+    return res.status(502).json({
+      ok: false,
+      errors: [
+        {
+          code: 'BAD_UPSTREAM_RESPONSE',
+          message: `El análisis devolvió HTTP ${upstream.status} sin un JSON válido`,
+          upstreamStatus: upstream.status,
+          body: text.slice(0, 1000) || null,
+        },
+      ],
+    });
+  } catch (e) {
+    const timeout = e?.name === 'TimeoutError' || e?.name === 'AbortError';
+    return res.status(timeout ? 504 : 502).json({
+      ok: false,
+      errors: [
+        {
+          code: timeout ? 'ANALYSIS_TIMEOUT' : 'ANALYSIS_UNAVAILABLE',
+          message: timeout
+            ? `El análisis no respondió en ${ANALYSIS_TIMEOUT_MS} ms`
+            : `No pude contactar al análisis: ${String(e.message || e)}`,
+        },
+      ],
+    });
+  }
 });
 
 // Valida inicio+ruta contra nuestro espacio y la registra
@@ -493,6 +610,7 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
   console.log(`martian-map API en http://localhost:${PORT}`);
   console.log(`  mapa:        ${MAP_ORIGIN}${MAP_BASE}`);
-  console.log(`  equipo 3:    ${TEAM3_URL || '(sin TEAM3_ANALYSIS_URL; rutas quedan en "validated")'}`);
+  console.log(`  plan:        ${PLAN_URL || '(sin ANALYSIS_URL; POST /api/plan responderá 503)'}`);
+  console.log(`  equipo 3:    ${TEAM3_URL || '(sin TEAM3_ANALYSIS_URL; /api/routes queda en "validated")'}`);
   console.log(`  contrato:    docs/API.md`);
 });

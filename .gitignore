@@ -1,0 +1,8 @@
+node_modules/
+dist/
+work/
+raw/
+*.tif
+!public/data/*.tif
+.DS_Store
+*.log

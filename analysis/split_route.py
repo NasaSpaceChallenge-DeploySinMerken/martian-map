@@ -8,11 +8,11 @@ from consumption import (BASE_RATE_G_MIN, RESERVE_MIN, STOP_RATE_G_MIN,
 from route_cost import profile_path
 
 
-def split_visits_by_oxygen(count, paths, distances, terrain, speed_kmh,
+def split_visits_by_oxygen(visit_indices, paths, distances, terrain, speed_kmh,
                            stop_minutes_per_visit):
-    """Return ordered visit indices for each feasible sortie.
+    """Return feasible sorties and visits excluded by the oxygen budget.
 
-    Minimize the number of refilled tanks first and total distance second.
+    Maximize covered visits, then minimize sorties and total distance.
     Pair geometries are the paths already chosen by the spatial planner.
     """
     usable_g = TANK_O2_G - RESERVE_MIN * BASE_RATE_G_MIN
@@ -25,10 +25,10 @@ def split_visits_by_oxygen(count, paths, distances, terrain, speed_kmh,
         return sum(segment["oxygen_g"] for segment in segments)
 
     feasible = {}
-    visit_indices = range(1, count)
-    for size in range(1, count):
+    bit_by_index = {index: 1 << position for position, index in enumerate(visit_indices)}
+    for size in range(1, len(visit_indices) + 1):
         for subset in combinations(visit_indices, size):
-            mask = sum(1 << (index - 1) for index in subset)
+            mask = sum(bit_by_index[index] for index in subset)
             stops_g = size * stop_minutes_per_visit * STOP_RATE_G_MIN
             if stops_g + RESERVE_MIN * BASE_RATE_G_MIN >= TANK_O2_G:
                 continue
@@ -52,7 +52,7 @@ def split_visits_by_oxygen(count, paths, distances, terrain, speed_kmh,
             if best is not None:
                 feasible[mask] = best
 
-    full_mask = (1 << (count - 1)) - 1
+    full_mask = (1 << len(visit_indices)) - 1
     @lru_cache(maxsize=None)
     def partition(mask):
         if mask == 0:
@@ -72,11 +72,10 @@ def split_visits_by_oxygen(count, paths, distances, terrain, speed_kmh,
             subset = (subset - 1) & mask
         return best
 
-    choice = partition(full_mask)
-    if choice is None:
-        impossible = [str(index) for index in visit_indices
-                      if 1 << (index - 1) not in feasible]
-        raise ValueError("El oxígeno no alcanza para visitar el punto(s) "
-                         + ", ".join(impossible)
-                         + " ni en una salida individual con regreso y reserva")
-    return [list(feasible[mask][2]) for mask in choice[2]]
+    candidates = [(mask, partition(mask)) for mask in range(full_mask + 1)]
+    covered_mask, choice = min(
+        ((mask, result) for mask, result in candidates if result is not None),
+        key=lambda item: (-item[0].bit_count(), item[1][0], item[1][1], item[1][2]),
+    )
+    excluded = [index for index in visit_indices if not covered_mask & bit_by_index[index]]
+    return [list(feasible[mask][2]) for mask in choice[2]], excluded

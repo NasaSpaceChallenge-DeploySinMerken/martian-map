@@ -135,32 +135,38 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
     # the distance objective; steep segments are disclosed in the response.
     add_pairs([(i, j) for i in range(count) for j in range(i + 1, count)], MAX_PLAN_GRADE)
 
-    n = count - 1
+    # A pairwise search can miss a connection through another visit.
+    for via in range(count):
+        for start in range(count):
+            for end in range(count):
+                if start == end or (start, via) not in distances or (via, end) not in distances:
+                    continue
+                length = distances[start, via] + distances[via, end]
+                if length < distances.get((start, end), float("inf")):
+                    distances[start, end] = length
+                    paths[start, end] = paths[start, via][:-1] + paths[via, end]
 
-    def choose_order():
-        # A pairwise search can miss a connection even when both locations
-        # are reachable through another visit. Close the known corridors.
-        for via in range(count):
-            for start in range(count):
-                for end in range(count):
-                    if start == end or (start, via) not in distances or (via, end) not in distances:
-                        continue
-                    length = distances[start, via] + distances[via, end]
-                    if length < distances.get((start, end), float("inf")):
-                        distances[start, end] = length
-                        paths[start, end] = paths[start, via][:-1] + paths[via, end]
+    reachable = [i for i in range(1, count) if (0, i) in distances]
+    unreachable = [
+        {"input_index": i - 1, "point": locations[i], "reason": "sin_camino_en_dem"}
+        for i in range(1, count) if i not in reachable
+    ]
+
+    def choose_order(visit_indices):
+        n = len(visit_indices)
+        bit_by_index = {index: 1 << position for position, index in enumerate(visit_indices)}
 
         # dp[(visited-mask, last-visit)] = (length, previous-visit)
-        dp = {(1 << (i - 1), i): (distances[0, i], 0)
-              for i in range(1, count) if (0, i) in distances}
+        dp = {(bit_by_index[i], i): (distances[0, i], 0)
+              for i in visit_indices}
         for mask in range(1, 1 << n):
-            for last in range(1, count):
+            for last in visit_indices:
                 state = (mask, last)
                 if state not in dp:
                     continue
                 cost = dp[state][0]
-                for nxt in range(1, count):
-                    bit = 1 << (nxt - 1)
+                for nxt in visit_indices:
+                    bit = bit_by_index[nxt]
                     if mask & bit or (last, nxt) not in distances:
                         continue
                     candidate = cost + distances[last, nxt]
@@ -170,7 +176,7 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
 
         full_mask = (1 << n) - 1
         choices = []
-        for last in range(1, count):
+        for last in visit_indices:
             state = (full_mask, last)
             if state not in dp or (return_to_arrival and (last, 0) not in distances):
                 continue
@@ -184,15 +190,13 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
         while last != 0:
             order.append(last)
             previous = dp[mask, last][1]
-            mask ^= 1 << (last - 1)
+            mask ^= bit_by_index[last]
             last = previous
         return list(reversed(order))
 
-    order = choose_order()
+    order = choose_order(reachable) if reachable else []
     if order is None:
-        missing = [str(i) for i in range(1, count) if (0, i) not in distances]
-        detail = f" Sin conexión encontrada desde el aterrizaje hasta: punto(s) {', '.join(missing)}." if missing else ""
-        raise ValueError(f"No se encontró una ruta para todos los puntos con el límite de pendiente de {MAX_PLAN_SLOPE_DEGREES}°." + detail)
+        raise ValueError("No se pudo ordenar los puntos conectados")
 
     def build_trip(visit_order, return_to_base):
         indices = [0] + visit_order + ([0] if return_to_base else [])
@@ -246,17 +250,33 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
             },
         }
 
-    initial = build_trip(order, return_to_arrival)
-    if (return_to_arrival and not initial["summary"]["oxygen"]["enough_with_reserve"]):
-        orders = split_visits_by_oxygen(count, paths, distances, terrain, speed_kmh,
-                                        stop_minutes_per_visit)
+    initial = build_trip(order, return_to_arrival) if order else None
+    if (initial and return_to_arrival
+            and not initial["summary"]["oxygen"]["enough_with_reserve"]):
+        orders, oxygen_excluded = split_visits_by_oxygen(
+            reachable, paths, distances, terrain, speed_kmh, stop_minutes_per_visit)
+        unreachable.extend(
+            {"input_index": i - 1, "point": locations[i],
+             "reason": "oxigeno_insuficiente_para_retorno_con_reserva"}
+            for i in oxygen_excluded
+        )
         trips = [build_trip(subset_order, True) for subset_order in orders]
         if not all(trip["summary"]["oxygen"]["enough_with_reserve"] for trip in trips):
             raise ValueError("No se encontró una división que conserve la reserva de oxígeno")
-    else:
+    elif initial:
         trips = [initial]
+    else:
+        trips = []
 
-    if len(trips) == 1:
+    if not trips:
+        combined = {
+            "arrival": locations[0], "ordered_visits": [], "route": [locations[0]],
+            "legs": [], "summary": {
+                "distance_m": 0, "travel_time_min": 0, "stop_time_min": 0,
+                "total_time_min": 0, "oxygen": oxygen_budget([]),
+            }, "trips": [],
+        }
+    elif len(trips) == 1:
         combined = trips[0]
     else:
         route = trips[0]["route"].copy()
@@ -300,6 +320,7 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
         "terrain_mode": terrain.mode,
         "return_to_arrival": return_to_arrival,
         "trip_count": len(trips),
+        "unreachable_visits": sorted(unreachable, key=lambda visit: visit["input_index"]),
         "grade_limit_degrees": MAX_PLAN_SLOPE_DEGREES,
         "grade_limit_percent": round(MAX_PLAN_GRADE * 100, 1),
         "warning": ("Ruta exploratoria: incluye pendientes superiores al 25 %. "

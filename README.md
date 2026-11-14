@@ -76,14 +76,15 @@ Salida de `/plan`:
 | --- | --- |
 | `map`, `coordinates`, `terrain_mode` | Mapa elegido, descripción de coordenadas y tipo de terreno. |
 | `arrival`, `ordered_visits` | Aterrizaje y orden elegido. Cada visita lleva `input_index` **desde cero** respecto de `visits`, `point` y, si hay división, `trip_index`. |
+| `unreachable_visits` | Visitas no incluidas: `input_index` desde cero, `point` en las coordenadas de entrada y `reason`: `sin_camino_en_dem` u `oxigeno_insuficiente_para_retorno_con_reserva`. Siempre es una lista, vacía si todas se cubren. |
 | `route` | Polilínea completa, en el mismo sistema de coordenadas de la entrada. |
 | `legs` | Tramos con `from_index`, `to_index` (`null` representa el aterrizaje), `path`, `distance_m`, `time_min`, `oxygen_g`, `hazards`; con división, también `trip_index`. |
 | `summary` | `distance_m`, `travel_time_min`, `stop_time_min`, `total_time_min` y `oxygen`. |
 | `summary.oxygen` | `travel_g`, `stops_g`, `used_g`, `tank_g`, `remaining_g`, `reserve_g`, `reserve_min`, `base_rate_g_min`, `stop_rate_g_min`, `enough_with_reserve`. |
-| `trip_count`, `trips` | `trip_count` siempre indica las salidas. `trips` aparece solo si hay más de una; cada salida contiene `trip_index`, `arrival`, `ordered_visits`, `route`, `legs` y su propio `summary`. |
+| `trip_count`, `trips` | `trip_count` siempre indica las salidas. `trips` aparece si hay más de una o si no hay ninguna; cada salida contiene `trip_index`, `arrival`, `ordered_visits`, `route`, `legs` y su propio `summary`. |
 | `grade_limit_degrees`, `grade_limit_percent`, `warning`, `method` | Límite exploratorio de 19° (≈34,4 %), advertencia por pendiente superior al 25 % y método utilizado. |
 
-Si una salida no cubre visitas, regreso y reserva de oxígeno, `/plan` busca el **menor número de salidas** desde el aterrizaje y, entre planes con ese número, la **menor distancia total**. Supone tanque repuesto al iniciar cada salida. El tiempo de reabastecimiento en la base no está modelado. En una salida individual, `summary.oxygen.remaining_g` es el remanente del tanque. Cuando hay varias, ese campo agregado es `null`: use `trips[i].summary.oxygen.remaining_g`; `summary.oxygen.min_remaining_g` es el menor remanente y `tank_refills` cuenta las recargas entre salidas. `summary.oxygen.used_g` suma todo el oxígeno consumido, aunque exceda un tanque porque se repone entre salidas.
+Si una salida no cubre visitas, regreso y reserva de oxígeno, `/plan` busca cubrir el **mayor número de visitas**; entre esos planes, el **menor número de salidas** desde el aterrizaje y la **menor distancia total**. Supone tanque repuesto al iniciar cada salida. El tiempo de reabastecimiento en la base no está modelado. En una salida individual, `summary.oxygen.remaining_g` es el remanente del tanque. Cuando hay varias, ese campo agregado es `null`: use `trips[i].summary.oxygen.remaining_g`; `summary.oxygen.min_remaining_g` es el menor remanente y `tank_refills` cuenta las recargas entre salidas. `summary.oxygen.used_g` suma todo el oxígeno consumido, aunque exceda un tanque porque se repone entre salidas.
 
 Ejemplo **abreviado** de respuesta dividida (los caminos y cifras son ilustrativos; se omiten campos de geometría):
 
@@ -103,7 +104,7 @@ Ejemplo **abreviado** de respuesta dividida (los caminos y cifras son ilustrativ
 }
 ```
 
-Si ningún recorrido individual puede visitar un punto, el endpoint devuelve 400 e identifica su índice de visita (mostrado desde uno para el usuario). Si `return_to_arrival` es `false`, devuelve una sola ruta sin división automática.
+Si algunos puntos no tienen camino transitable o exceden el presupuesto de oxígeno, el endpoint devuelve **HTTP 200** con las rutas válidas y los puntos excluidos en `unreachable_visits`. Por ejemplo, `"unreachable_visits": [{"input_index": 1, "point": [900, 500], "reason": "sin_camino_en_dem"}]`. Si ninguna visita es viable, devuelve `"trip_count": 0`, `"trips": []`, `"route": [arrival]`, `"legs": []` y resumen de recorrido cero. Si `return_to_arrival` es `false`, devuelve una sola ruta sin división automática; puede indicar visitas sin camino, pero no excluye por presupuesto de oxígeno.
 
 ## `POST /gale/analyze` y `POST /analyze`: puntos en orden dado
 
@@ -127,4 +128,4 @@ Ambos entregan `return_route`, `return_method`, `segments` (con geometría, dist
 
 El módulo de Ingrid estima consumo muestra a muestra: tasa base **1,43 g/min**, tanque **700 g**, reserva **60 min** y parada a la misma tasa. La subida aumenta el consumo según su factor ACSM; la bajada se trata como plano para oxígeno. Son supuestos exploratorios, no una validación fisiológica de EVA marciana. El backend evita pendientes de 19° o más y rugosidad de 5 m o más en `/plan`; los caminos son aproximados sobre una malla.
 
-Los errores de validación o una ruta imposible responden con **HTTP 400** y `{"error": "descripción"}`. Una ruta fuera del DEM se rechaza aunque sea visible en CTX o THEMIS. `OPTIONS` responde para solicitudes CORS del navegador.
+Los errores de validación responden con **HTTP 400** y `{"error": "descripción"}`. Las visitas sin camino o sin oxígeno suficiente se informan en `unreachable_visits` con **HTTP 200**. Una coordenada fuera del DEM se rechaza aunque sea visible en CTX o THEMIS. `OPTIONS` responde para solicitudes CORS del navegador.

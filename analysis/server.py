@@ -95,6 +95,8 @@ def plan_request(payload):
         result["route"] = [GALE.to_lonlat(*point) for point in result["route"]]
         for visit in result["ordered_visits"]:
             visit["point"] = GALE.to_lonlat(*visit["point"])
+        for visit in result["unreachable_visits"]:
+            visit["point"] = GALE.to_lonlat(*visit["point"])
         for leg in result["legs"]:
             leg["path"] = [GALE.to_lonlat(*point) for point in leg["path"]]
         for trip in result.get("trips", []):

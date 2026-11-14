@@ -8,7 +8,7 @@ python analysis/server.py
 python -m unittest discover -s analysis -p 'test_*.py'
 ```
 
-La API escucha en `http://127.0.0.1:8000` (puerto configurable con `MARTIAN_API_PORT`). Los POST reciben y entregan JSON. Gale usa **`[longitud este, latitud norte]` en grados marcianos**, por ejemplo `[137.44, -4.59]`; `terrain` usa **`[x, y]` en metros**. No enviar píxeles del mapa ni coordenadas terrestres Web Mercator. La zona CTX completa no tiene cobertura DEM suficiente para planificar rutas.
+La API escucha en el puerto `PORT` de Railway o en `MARTIAN_API_PORT` (8000 por defecto), sobre `0.0.0.0`. Los POST reciben y entregan JSON. Gale usa **`[longitud este, latitud norte]` en grados marcianos**, por ejemplo `[137.44, -4.59]`; `terrain` usa **`[x, y]` en metros**. No enviar píxeles del mapa ni coordenadas terrestres Web Mercator. La zona CTX completa no tiene cobertura DEM suficiente para planificar rutas. La configuración de Railway está en [analysis/README.md](analysis/README.md).
 
 ## Consultas GET
 

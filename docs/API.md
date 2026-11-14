@@ -39,6 +39,11 @@ curl -s http://localhost:3000/api/health
 
 Para que el front dibuje el área disponible antes de que el usuario elija puntos.
 
+> **`bounds` = el rango que acepta el modelo predictivo** (el que pide el equipo
+> de análisis): lon `137.122471` – `137.729813` °, lat `−4.925474` – `−4.248963` °.
+> Un punto fuera de ahí no entra al modelo, así que la API lo rechaza.
+> `mapBounds` es la extensión de los tiles (la imagen llega un poco más allá).
+
 ```bash
 curl -s http://localhost:3000/api/space
 ```
@@ -47,9 +52,11 @@ curl -s http://localhost:3000/api/space
 {
   "ok": true,
   "crs": "IAU:49900",
-  "bounds": [137.10, -4.95, 137.75, -4.22],
-  "polygon": [[137.10,-4.95],[137.75,-4.95],[137.75,-4.22],[137.10,-4.22],[137.10,-4.95]],
+  "bounds": [137.122471, -4.925474, 137.729813, -4.248963],
+  "polygon": [[137.122471,-4.925474],[137.729813,-4.925474],[137.729813,-4.248963],[137.122471,-4.248963],[137.122471,-4.925474]],
+  "range": { "lon": [137.122471, 137.729813], "lat": [-4.925474, -4.248963] },
   "elevationBounds": [137.12247113204074, -4.925474311955847, 137.72981290693286, -4.248963057145466],
+  "mapBounds": [137.10, -4.95, 137.75, -4.22],
   "landing": { "name": "Bradbury (Curiosity)", "coord": [137.4417, -4.5895] },
   "view": { "center": [137.4417, -4.5895], "zoom": 14 },
   "layers": ["ctx", "hillshade", "dem"]
@@ -139,27 +146,40 @@ curl -s -X POST http://localhost:3000/api/routes \
 `forwarded` (enviada al Equipo 3, esperando resultado) → `analyzed`
 (resultado disponible en `analysis`).
 
-**422 — fuera de nuestro espacio:**
+**422 — fuera del rango de análisis (el punto no entra al modelo predictivo):**
 
 ```json
 {
   "ok": false,
   "errors": [{
     "code": "OUT_OF_SPACE",
-    "message": "El punto inicial o la ruta quedan fuera del espacio cargado (zona Gale)",
+    "message": "El punto inicial o la ruta quedan fuera del rango válido para el análisis (lon 137.122471–137.729813°, lat -4.925474–-4.248963°)",
     "points": [2],
     "segments": [{ "segment": 1, "at": [137.81, -4.7] }]
   }],
-  "space": { "bounds": [137.10, -4.95, 137.75, -4.22] }
+  "space": {
+    "bounds": [137.122471, -4.925474, 137.729813, -4.248963],
+    "mapBounds": [137.10, -4.95, 137.75, -4.22]
+  }
 }
 ```
 
-**422 — sin dato de elevación** (dentro de la zona pero en el anillo nodata):
+- `points`: índices de los vértices fuera del rango (`0` = punto inicial).
+- `segments`: tramo que se sale del rango, con el punto exacto por donde se sale.
+
+**422 — sin dato de elevación** (dentro del rango pero sobre nodata):
 
 ```json
-{ "ok": false, "errors": [{ "code": "NO_DATA",
-  "message": "La ruta pasa por zonas sin datos de elevación (nodata)", "points": [0] }] }
+{ "ok": false,
+  "errors": [{ "code": "NO_DATA",
+    "message": "La ruta pasa por zonas sin datos de elevación (nodata) dentro del rango válido",
+    "points": [0],
+    "segments": [{ "segment": 2, "coord": [137.3, -4.7] }] }] }
 ```
+
+Se comprueba el relieve de los vértices **y a lo largo de los tramos**
+(muestreados cada ~250 m), porque el modelo necesita el relieve de todo el
+camino, no solo de los puntos que elige el usuario.
 
 **400 — petición mal formada:** códigos `INVALID_START`, `INVALID_ROUTE`,
 `INVALID_COORD`, `ROUTE_TOO_LONG`, `UNKNOWN_LAYER`, `INVALID_JSON`.
@@ -219,6 +239,10 @@ Si existe `dist/` (`npm run build`), el servidor también sirve el mapa en
 
 ## Notas
 
+- El rango de análisis se toma **tal como lo pasó el equipo de análisis**
+  (redondeado a 6 decimales). Al muestrear la elevación se acepta 1 píxel de
+  tolerancia (5 m) en el borde, para que un punto elegido justo en el límite
+  no se rechace por error.
 - Almacenamiento de rutas: **en memoria** (se pierde al reiniciar). Para la
   demo está bien; si se necesita persistencia, guardar en fichero/SQLite.
 - Sin autenticación (demo interna). Añadirla antes de exponerlo públicamente.

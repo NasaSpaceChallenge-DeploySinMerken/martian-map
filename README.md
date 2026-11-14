@@ -27,9 +27,13 @@ Equipo 3 → POST /api/routes/:id/analysis (callback) o responde sincrónicament
 Equipo 2 (front) → GET /api/routes/:id  (estado: validated → forwarded → analyzed)
 ```
 
-- **Espacio**: zona cargada `lon 137.10–137.75, lat −4.95 – −4.22`; los puntos
-  fuera dan `422 OUT_OF_SPACE` y los que caen sin dato de elevación `422 NO_DATA`
-  (los segmentos se densifican cada ~250 m para detectar cruces de borde).
+- **Rango válido (el que pide el equipo de análisis)**: lon `137.122471` –
+  `137.729813` °, lat `−4.925474` – `−4.248963` °. Lo que caiga fuera da
+  `422 OUT_OF_SPACE` (con los índices de los puntos y el punto exacto por donde
+  se sale el tramo) y lo que esté sobre nodata da `422 NO_DATA` (se comprueba
+  el relieve de los vértices **y de los tramos**, muestreados cada ~250 m).
+  El front puede leerlo de `GET /api/space` (`bounds` / `range`) y dibujarlo:
+  en el mapa aparece la capa **“Área válida (análisis)”**.
 - **Capas**: el catálogo vive en `src/map/catalog.js` (compartido por el mapa y
   la API); para sumar una capa nueva (p. ej. temperatura) basta añadir su
   entrada con su COG en `public/data/`.

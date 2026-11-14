@@ -32,8 +32,9 @@ import proj4 from 'proj4';
 import { fromFile } from 'geotiff';
 import {
   ZONE_BOUNDS,
-  ZONE_POLYGON,
   DEM_DATA_BOUNDS,
+  ANALYSIS_BOUNDS,
+  ANALYSIS_POLYGON,
   BRADBURY,
   CRS,
   LAYERS,
@@ -64,7 +65,18 @@ function demImage() {
   return demImagePromise;
 }
 
-/** Elevación en metros para [lon, lat]; null si no hay dato (nodata). */
+/** Lee el valor de un píxel; null si es nodata. */
+async function readValue(image, px, py) {
+  const bands = await image.readRasters({ window: [px, py, px + 1, py + 1] });
+  const value = bands[0][0];
+  return value <= DEM_VALID_MIN ? null : value;
+}
+
+/**
+ * Elevación en metros para [lon, lat]; null si no hay dato (nodata).
+ * Si el píxel cae en el borde del dato, prueba los vecinos (1 px = 5 m) para
+ * que un punto elegido justo en el límite del rango siga teniendo elevación.
+ */
 async function sampleElevation(lon, lat) {
   const image = await demImage();
   const [x, y] = llToEqc.forward([lon, lat]);
@@ -73,9 +85,18 @@ async function sampleElevation(lon, lat) {
   const px = Math.floor((x - ox) / rx);
   const py = Math.floor((y - oy) / ry);
   if (px < 0 || py < 0 || px >= image.getWidth() || py >= image.getHeight()) return null;
-  const bands = await image.readRasters({ window: [px, py, px + 1, py + 1] });
-  const value = bands[0][0];
-  return value <= DEM_VALID_MIN ? null : value;
+
+  const value = await readValue(image, px, py);
+  if (value !== null) return value;
+
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+    const nx = px + dx;
+    const ny = py + dy;
+    if (nx < 0 || ny < 0 || nx >= image.getWidth() || ny >= image.getHeight()) continue;
+    const v = await readValue(image, nx, ny);
+    if (v !== null) return v;
+  }
+  return null;
 }
 
 // --- Utilidades ---
@@ -99,7 +120,7 @@ function distanceKm(a, b) {
   return 2 * (MARS_RADIUS / 1000) * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-/** ¿Todos los segmentos (densificados cada ~250 m) caben en la zona? */
+/** ¿Todos los segmentos (densificados cada ~250 m) caben en el rango de análisis? */
 function segmentsOutsideZone(path) {
   const out = [];
   for (let i = 0; i < path.length - 1; i++) {
@@ -109,13 +130,47 @@ function segmentsOutsideZone(path) {
     for (let s = 1; s < steps; s++) {
       const t = s / steps;
       const mid = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-      if (!inside(mid, ZONE_BOUNDS)) {
+      if (!inside(mid, ANALYSIS_BOUNDS)) {
         out.push({ segment: i, at: [+mid[0].toFixed(6), +mid[1].toFixed(6)] });
         break;
       }
     }
   }
   return out;
+}
+
+/**
+ * Muestrea la elevación a lo largo de los tramos (cada ~250 m) para detectar
+ * huecos sin dato entre vértices: el modelo predictivo necesita el relieve
+ * de todo el camino, no solo de los puntos que elige el usuario.
+ */
+async function sampleSegments(path, stepKm = 0.25, maxSamples = 400) {
+  const lengths = [];
+  let total = 0;
+  for (let i = 0; i < path.length - 1; i++) {
+    const d = distanceKm(path[i], path[i + 1]);
+    lengths.push(d);
+    total += d;
+  }
+  if (total === 0) return [];
+
+  const totalSteps = Math.min(maxSamples, Math.max(1, Math.ceil(total / stepKm)));
+  const bad = [];
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i];
+    const b = path[i + 1];
+    const steps = Math.max(1, Math.round((totalSteps * lengths[i]) / total));
+    for (let s = 1; s < steps; s++) {
+      const t = s / steps;
+      const mid = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const elevation = await sampleElevation(mid[0], mid[1]);
+      if (elevation === null) {
+        bad.push({ segment: i, coord: [+mid[0].toFixed(6), +mid[1].toFixed(6)] });
+        break; // un hueco ya invalida el tramo
+      }
+    }
+  }
+  return bad;
 }
 
 /** Envía la ruta al Equipo 3 si TEAM3_ANALYSIS_URL está configurado. */
@@ -184,9 +239,16 @@ app.get('/api/space', (req, res) => {
   res.json({
     ok: true,
     crs: CRS.geographic,
-    bounds: ZONE_BOUNDS,               // [W, S, E, N] grados
-    polygon: ZONE_POLYGON,             // para dibujar el contorno
-    elevationBounds: DEM_DATA_BOUNDS,  // donde hay dato de elevación real
+    // Rango VÁLIDO para el análisis predictivo (lon 137.122471–137.729813,
+    // lat −4.925474–−4.248963). El front debe restringir aquí los puntos.
+    bounds: ANALYSIS_BOUNDS,      // [W, S, E, N] grados
+    polygon: ANALYSIS_POLYGON,    // para dibujar el contorno
+    range: {
+      lon: [ANALYSIS_BOUNDS[0], ANALYSIS_BOUNDS[2]],
+      lat: [ANALYSIS_BOUNDS[1], ANALYSIS_BOUNDS[3]],
+    },
+    elevationBounds: DEM_DATA_BOUNDS, // donde hay dato de elevación real
+    mapBounds: ZONE_BOUNDS,           // extensión de los tiles (la imagen llega algo más allá)
     landing: { name: 'Bradbury (Curiosity)', coord: BRADBURY },
     view: { center: BRADBURY, zoom: 14 },
     layers: LAYERS.map((l) => l.id),
@@ -246,10 +308,11 @@ app.post('/api/routes', async (req, res) => {
     // Camino completo = inicio + waypoints, sin duplicados consecutivos
     const path = [start, ...route].filter((p, i, arr) => i === 0 || !samePoint(p, arr[i - 1]));
 
-    // 1) ¿está dentro de nuestro espacio?
+    // 1) ¿está dentro del rango válido para el modelo predictivo?
+    //    (lon 137.122471–137.729813, lat −4.925474–−4.248963)
     const outsidePoints = [];
     path.forEach((p, i) => {
-      if (!inside(p, ZONE_BOUNDS)) outsidePoints.push(i);
+      if (!inside(p, ANALYSIS_BOUNDS)) outsidePoints.push(i);
     });
     const outsideSegments = segmentsOutsideZone(path);
     if (outsidePoints.length || outsideSegments.length) {
@@ -258,16 +321,19 @@ app.post('/api/routes', async (req, res) => {
         errors: [
           {
             code: 'OUT_OF_SPACE',
-            message: 'El punto inicial o la ruta quedan fuera del espacio cargado (zona Gale)',
+            message:
+              'El punto inicial o la ruta quedan fuera del rango válido para el análisis ' +
+              `(lon ${ANALYSIS_BOUNDS[0].toFixed(6)}–${ANALYSIS_BOUNDS[2].toFixed(6)}°, ` +
+              `lat ${ANALYSIS_BOUNDS[1].toFixed(6)}–${ANALYSIS_BOUNDS[3].toFixed(6)}°)`,
             points: outsidePoints,
             segments: outsideSegments,
           },
         ],
-        space: { bounds: ZONE_BOUNDS },
+        space: { bounds: ANALYSIS_BOUNDS, mapBounds: ZONE_BOUNDS },
       });
     }
 
-    // 2) ¿hay dato de elevación en cada punto? (el análisis predictivo lo necesita)
+    // 2) ¿hay dato de elevación en los puntos y a lo largo del camino?
     const waypoints = [];
     const noDataPoints = [];
     for (let i = 0; i < path.length; i++) {
@@ -275,17 +341,20 @@ app.post('/api/routes', async (req, res) => {
       if (elevation === null) noDataPoints.push(i);
       else waypoints.push({ coord: path[i], elevation });
     }
-    if (noDataPoints.length) {
+    const noDataSegments = await sampleSegments(path);
+    if (noDataPoints.length || noDataSegments.length) {
       return res.status(422).json({
         ok: false,
         errors: [
           {
             code: 'NO_DATA',
-            message: 'La ruta pasa por zonas sin datos de elevación (nodata)',
+            message:
+              'La ruta pasa por zonas sin datos de elevación (nodata) dentro del rango válido',
             points: noDataPoints,
+            segments: noDataSegments,
           },
         ],
-        space: { bounds: ZONE_BOUNDS, elevationBounds: DEM_DATA_BOUNDS },
+        space: { bounds: ANALYSIS_BOUNDS, elevationBounds: DEM_DATA_BOUNDS },
       });
     }
 
@@ -308,7 +377,8 @@ app.post('/api/routes', async (req, res) => {
         minElevation: Math.min(...elevations),
         maxElevation: Math.max(...elevations),
       },
-      bounds: ZONE_BOUNDS,
+      bounds: ANALYSIS_BOUNDS,
+      mapBounds: ZONE_BOUNDS,
       status: 'validated',
       analysis: null,
       analysisTarget: TEAM3_URL,

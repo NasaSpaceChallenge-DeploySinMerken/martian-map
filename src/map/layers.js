@@ -5,10 +5,11 @@ import VectorSource from 'ol/source/Vector';
 import GeoJSON from 'ol/format/GeoJSON';
 import Feature from 'ol/Feature';
 import Point from 'ol/geom/Point';
+import Polygon from 'ol/geom/Polygon';
 import { Style, Stroke, Circle as CircleStyle, Fill } from 'ol/style';
 import { transform } from 'ol/proj';
 import { MARS_LL, MARS_EQC } from './projection.js';
-import { LAYERS, DEM_RAMP, DEM_NODATA, CRS } from './catalog.js';
+import { LAYERS, DEM_RAMP, DEM_NODATA, CRS, ANALYSIS_POLYGON } from './catalog.js';
 
 // Los metadatos (título, visibilidad, opacidad, rampa) viven en catalog.js,
 // que comparte el servidor de la API: cambiar ahí cambia en ambos lados.
@@ -93,6 +94,22 @@ export function createRouteLayer() {
       format: new GeoJSON({ dataProjection: MARS_LL, featureProjection: MARS_EQC }),
     }),
     style: new Style({ stroke: new Stroke({ color: '#ffcc00', width: 3 }) }),
+  });
+}
+
+// Rectángulo del rango que acepta el modelo predictivo (el mismo que valida
+// la API en POST /api/routes). Sirve para ver de un vistazo qué zona es válida.
+export function createAnalysisAreaLayer() {
+  const ring = ANALYSIS_POLYGON.map(([lon, lat]) => transform([lon, lat], MARS_LL, MARS_EQC));
+  return new VectorLayer({
+    title: 'Área válida (análisis)',
+    source: new VectorSource({
+      features: [new Feature(new Polygon([ring]))],
+    }),
+    style: new Style({
+      stroke: new Stroke({ color: '#ff3b30', width: 2, lineDash: [8, 5] }),
+      fill: new Fill({ color: 'rgba(255, 59, 48, 0.04)' }),
+    }),
   });
 }
 

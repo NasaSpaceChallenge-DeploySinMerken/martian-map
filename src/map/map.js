@@ -3,14 +3,19 @@ import View from 'ol/View';
 import ScaleLine from 'ol/control/ScaleLine';
 import { transform } from 'ol/proj';
 import { MARS_LL, MARS_EQC } from './projection.js';
-import { createLayers, createRouteLayer, createAstronautLayer } from './layers.js';
+import { createLayers, createRouteLayer, createAstronautLayer, createAnalysisAreaLayer } from './layers.js';
 import { BRADBURY } from './catalog.js';
 
 // Punto de aterrizaje de Curiosity (Bradbury Mound), en grados [lon, lat]
 export { BRADBURY };
 
 export function createMap(target) {
-  const layers = [...createLayers(), createRouteLayer(), createAstronautLayer()];
+  const layers = [
+    ...createLayers(),
+    createAnalysisAreaLayer(),
+    createRouteLayer(),
+    createAstronautLayer(),
+  ];
   const map = new Map({
     target,
     layers,

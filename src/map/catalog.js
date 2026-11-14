@@ -30,6 +30,22 @@ export const DEM_DATA_BOUNDS = [
   137.72981290693286, -4.248963057145466,
 ];
 
+// Rango que exige el equipo de ANÁLISIS: un punto fuera de él no entra al
+// modelo predictivo, así que la API lo rechaza antes de reenviar la ruta.
+// Son los valores que nos han pasado, redondeados a 6 decimales:
+//   lon 137.122471 – 137.729813 °   lat −4.925474 – −4.248963 °
+// (Coinciden con el bbox del DEM de origen: DEM_DATA_BOUNDS; usamos los
+//  redondeados para que un punto en el borde exacto que manda el front
+//  no quede fuera por 1e-7°.)
+export const ANALYSIS_BOUNDS = [137.122471, -4.925474, 137.729813, -4.248963];
+export const ANALYSIS_POLYGON = [ // cerrado, para que el front lo dibuje
+  [ANALYSIS_BOUNDS[0], ANALYSIS_BOUNDS[1]],
+  [ANALYSIS_BOUNDS[2], ANALYSIS_BOUNDS[1]],
+  [ANALYSIS_BOUNDS[2], ANALYSIS_BOUNDS[3]],
+  [ANALYSIS_BOUNDS[0], ANALYSIS_BOUNDS[3]],
+  [ANALYSIS_BOUNDS[0], ANALYSIS_BOUNDS[1]],
+];
+
 // Punto de aterrizaje de Curiosity (Bradbury Mound) [lon, lat]
 export const BRADBURY = [137.4417, -4.5895];
 

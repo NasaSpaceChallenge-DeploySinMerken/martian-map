@@ -1,6 +1,7 @@
 import unittest
 
 from route_cost import analyze_route
+from return_route import shortest_return
 class FlatTerrain:
     bounds = (0, 0, 1000, 1000)
     sample_spacing_m = 25
@@ -81,6 +82,22 @@ class RouteCostTests(unittest.TestCase):
         self.assertEqual(result["return_route"][-1], points[0])
         self.assertLess(result["summary"]["return_distance_m"],
                         result["summary"]["outbound_distance_m"])
+
+    def test_search_expands_when_detour_is_outside_local_window(self):
+        class LongBarrier:
+            bounds = (0, 0, 4000, 4000)
+            sample_spacing_m = 20
+
+            def elevation(self, x, y):
+                return None if 950 <= x <= 1050 and y <= 2500 else 0
+
+            def roughness(self, x, y):
+                return 0
+
+        path, method = shortest_return([500, 1000], [1500, 1000], LongBarrier(),
+                                       [[500, 1000], [1500, 1000]])
+        self.assertEqual(method, "malla A*")
+        self.assertTrue(any(point[1] > 2500 for point in path))
 
 
 if __name__ == "__main__":

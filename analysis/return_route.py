@@ -12,7 +12,7 @@ def _distance(a, b):
     return hypot(b[0] - a[0], b[1] - a[1])
 
 
-def _clear(a, b, terrain, step_m):
+def _clear(a, b, terrain, step_m, max_grade=MAX_GRADE):
     """Check every sample of a potential link; no-data cells are impassable."""
     length = _distance(a, b)
     if length < 1:
@@ -25,7 +25,7 @@ def _clear(a, b, terrain, step_m):
         point = (a[0] + (b[0] - a[0]) * i / count,
                  a[1] + (b[1] - a[1]) * i / count)
         height = terrain.elevation(*point)
-        if height is None or abs(height - previous) / (length / count) >= MAX_GRADE:
+        if height is None or abs(height - previous) / (length / count) >= max_grade:
             return False
         if terrain.roughness(*point) >= MAX_ROUGHNESS_M:
             return False
@@ -37,7 +37,7 @@ def _length(path):
     return sum(_distance(a, b) for a, b in zip(path, path[1:]))
 
 
-def shortest_return(start, base, terrain, outward):
+def shortest_return(start, base, terrain, outward, _margin=None, *, max_grade=MAX_GRADE):
     """Return (points, method). Distance is optimized, not travel time.
 
     The straight line is the global lower bound. Otherwise A* finds the
@@ -46,7 +46,7 @@ def shortest_return(start, base, terrain, outward):
     txmin, tymin, txmax, tymax = terrain.bounds
     route_span = max(max(point[0] for point in outward) - min(point[0] for point in outward),
                      max(point[1] for point in outward) - min(point[1] for point in outward))
-    margin = max(500, route_span / 2)
+    margin = max(500, route_span / 2, _margin or 0)
     xmin = max(txmin, min(point[0] for point in outward) - margin)
     xmax = min(txmax, max(point[0] for point in outward) + margin)
     ymin = max(tymin, min(point[1] for point in outward) - margin)
@@ -55,14 +55,20 @@ def shortest_return(start, base, terrain, outward):
     sample_step = min(spacing / 2, max(terrain.sample_spacing_m / 2, 5))
     if _distance(start, base) < 1:
         return [start], "ya en base"
-    if _clear(start, base, terrain, sample_step):
+    if _clear(start, base, terrain, sample_step, max_grade):
         return [start, base], "directa"
 
     retrace = list(reversed(outward))
 
     def retrace_or_fail():
-        if all(_clear(a, b, terrain, sample_step) for a, b in zip(retrace, retrace[1:])):
+        if all(_clear(a, b, terrain, sample_step, max_grade) for a, b in zip(retrace, retrace[1:])):
             return retrace, "camino de ida"
+        # A narrow window can cut off a valid detour around a ridge. Expand
+        # only after the local grid fails, to keep common routes fast.
+        next_margin = 2000 if margin < 2000 else 5000 if margin < 5000 else None
+        if next_margin is not None:
+            return shortest_return(start, base, terrain, outward, _margin=next_margin,
+                                   max_grade=max_grade)
         raise ValueError("No se encontró una ruta de regreso transitable")
 
     cols = max(2, ceil((xmax - xmin) / spacing) + 1)
@@ -81,7 +87,7 @@ def shortest_return(start, base, terrain, outward):
         for ix in range(max(0, cx - 2), min(cols, cx + 3)):
             for iy in range(max(0, cy - 2), min(rows, cy + 3)):
                 node = (ix, iy)
-                if _clear(point, position(node), terrain, sample_step):
+                if _clear(point, position(node), terrain, sample_step, max_grade):
                     found.append(node)
         return found
 
@@ -94,7 +100,7 @@ def shortest_return(start, base, terrain, outward):
     def passable(a, b):
         key = tuple(sorted((a, b)))
         if key not in edge_cache:
-            edge_cache[key] = _clear(position(a), position(b), terrain, sample_step)
+            edge_cache[key] = _clear(position(a), position(b), terrain, sample_step, max_grade)
         return edge_cache[key]
 
     queue = []
@@ -151,14 +157,14 @@ def shortest_return(start, base, terrain, outward):
     index = 0
     while index < len(path) - 1:
         for next_index in range(len(path) - 1, index, -1):
-            if _clear(path[index], path[next_index], terrain, sample_step):
+            if _clear(path[index], path[next_index], terrain, sample_step, max_grade):
                 break
         smooth.append(path[next_index])
         index = next_index
 
     # The already walked path is also a valid candidate when it meets the
     # return constraints. Never report a longer route than retracing it.
-    if (all(_clear(a, b, terrain, sample_step) for a, b in zip(retrace, retrace[1:]))
+    if (all(_clear(a, b, terrain, sample_step, max_grade) for a, b in zip(retrace, retrace[1:]))
             and _length(retrace) < _length(smooth)):
         return retrace, "camino de ida"
     return smooth, "malla A*"

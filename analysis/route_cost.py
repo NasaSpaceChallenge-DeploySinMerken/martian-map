@@ -14,6 +14,50 @@ def _number(value, name, minimum, maximum):
     return float(value)
 
 
+def profile_path(path, terrain, speed_kmh, direction):
+    """Measure an already chosen polyline without adding a return trip."""
+    output = []
+    for a, b in zip(path, path[1:]):
+        distance = hypot(b[0] - a[0], b[1] - a[1])
+        if distance < 1:
+            raise ValueError("Separa los puntos de la ruta al menos 1 m")
+        # Long traverses remain analyzable. Bound work per leg and report
+        # the resulting interval so a coarser sample is never hidden.
+        count = min(ceil(distance / max(terrain.sample_spacing_m, 10)), 5000)
+        hours = total_rise = max_grade = max_roughness = 0.0
+        hazards = set()
+        for index in range(count):
+            start = [a[j] + (b[j] - a[j]) * index / count for j in (0, 1)]
+            end = [a[j] + (b[j] - a[j]) * (index + 1) / count for j in (0, 1)]
+            za, zb = terrain.elevation(*start), terrain.elevation(*end)
+            if za is None or zb is None:
+                raise ValueError("La ruta pasa por una zona sin datos de elevación")
+            metrics = segment_metrics(start, end, za, zb)
+            grade = metrics["grade"]
+            roughness = terrain.roughness((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
+            # Transparent demo rule: steep and uneven terrain reduces speed.
+            slowdown = 1 + 2.5 * max(grade, 0) + 1.7 * max(-grade, 0) + roughness / 8
+            speed_mph = speed_kmh * 1000 / slowdown
+            dt = metrics["distance_m"] / speed_mph
+            hours += dt
+            total_rise += metrics["rise_m"]
+            max_grade = max(max_grade, abs(grade))
+            max_roughness = max(max_roughness, roughness)
+            if abs(grade) >= 0.25:
+                hazards.add("pendiente fuerte")
+            if roughness >= 5:
+                hazards.add("terreno irregular")
+        output.append({
+            "from": a, "to": b, "direction": direction,
+            "distance_m": round(distance, 1), "rise_m": round(total_rise, 1),
+            "sample_interval_m": round(distance / count, 1),
+            "max_grade_percent": round(max_grade * 100, 1),
+            "roughness_m": round(max_roughness, 1),
+            "time_min": round(hours * 60, 1), "hazards": sorted(hazards),
+        })
+    return output
+
+
 def analyze_route(payload, terrain):
     points = payload.get("points")
     if not isinstance(points, list) or not 2 <= len(points) <= 30:
@@ -33,51 +77,9 @@ def analyze_route(payload, terrain):
     speed_kmh = _number(settings.get("speed_kmh", 2.5), "Velocidad base", 0.3, 8)
     stop_minutes = _number(settings.get("stop_minutes", 10), "Parada", 0, 180)
 
-    def legs(path, direction):
-        output = []
-        for a, b in zip(path, path[1:]):
-            distance = hypot(b[0] - a[0], b[1] - a[1])
-            if distance < 1:
-                raise ValueError("Separa los puntos de la ruta al menos 1 m")
-            # Long traverses remain analyzable. Bound work per leg and report
-            # the resulting interval so a coarser sample is never hidden.
-            count = min(ceil(distance / max(terrain.sample_spacing_m, 10)), 5000)
-            hours = total_rise = max_grade = max_roughness = 0.0
-            hazards = set()
-            for index in range(count):
-                start = [a[j] + (b[j] - a[j]) * index / count for j in (0, 1)]
-                end = [a[j] + (b[j] - a[j]) * (index + 1) / count for j in (0, 1)]
-                za, zb = terrain.elevation(*start), terrain.elevation(*end)
-                if za is None or zb is None:
-                    raise ValueError("La ruta pasa por una zona sin datos de elevación")
-                metrics = segment_metrics(start, end, za, zb)
-                grade = metrics["grade"]
-                roughness = terrain.roughness((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
-                # Transparent demo rule: steep and uneven terrain reduces speed.
-                slowdown = 1 + 2.5 * max(grade, 0) + 1.7 * max(-grade, 0) + roughness / 8
-                speed_mph = speed_kmh * 1000 / slowdown
-                dt = metrics["distance_m"] / speed_mph
-                hours += dt
-                total_rise += metrics["rise_m"]
-                max_grade = max(max_grade, abs(grade))
-                max_roughness = max(max_roughness, roughness)
-                if abs(grade) >= 0.25:
-                    hazards.add("pendiente fuerte")
-                if roughness >= 5:
-                    hazards.add("terreno irregular")
-            output.append({
-                "from": a, "to": b, "direction": direction,
-                "distance_m": round(distance, 1), "rise_m": round(total_rise, 1),
-                "sample_interval_m": round(distance / count, 1),
-                "max_grade_percent": round(max_grade * 100, 1),
-                "roughness_m": round(max_roughness, 1),
-                "time_min": round(hours * 60, 1), "hazards": sorted(hazards),
-            })
-        return output
-
-    outward = legs(route, "ida")
+    outward = profile_path(route, terrain, speed_kmh, "ida")
     return_route, return_method = shortest_return(route[-1], route[0], terrain, route)
-    returning = legs(return_route, "vuelta")
+    returning = profile_path(return_route, terrain, speed_kmh, "vuelta")
     segments = outward + returning
     distance_m = sum(item["distance_m"] for item in segments)
     time_min = sum(item["time_min"] for item in segments) + stop_minutes

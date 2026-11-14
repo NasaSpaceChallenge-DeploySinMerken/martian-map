@@ -35,6 +35,24 @@ class RouteCostTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "al menos 1 m"):
             analyze_route({"points": [[100, 100], [100, 100]]}, FlatTerrain())
 
+    def test_long_leg_uses_bounded_sampling_instead_of_failing(self):
+        class WideFlatTerrain:
+            bounds = (0, 0, 60000, 100)
+            sample_spacing_m = 10
+            mode = "test"
+
+            def elevation(self, x, y):
+                return 0
+
+            def roughness(self, x, y):
+                return 0
+
+        result = analyze_route({"points": [[0, 50], [55000, 50]],
+                                "settings": {"speed_kmh": 2, "stop_minutes": 0}}, WideFlatTerrain())
+        self.assertEqual(result["summary"]["distance_m"], 110000)
+        self.assertEqual(result["segments"][0]["sample_interval_m"], 11)
+        self.assertEqual(result["return_method"], "directa")
+
     def test_return_shortcuts_waypoints_when_straight_line_is_clear(self):
         points = [[100, 100], [100, 300], [300, 300], [300, 100]]
         result = analyze_route({"points": points, "settings": {"stop_minutes": 0}}, FlatTerrain())

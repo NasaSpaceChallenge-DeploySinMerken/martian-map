@@ -39,9 +39,9 @@ def analyze_route(payload, terrain):
             distance = hypot(b[0] - a[0], b[1] - a[1])
             if distance < 1:
                 raise ValueError("Separa los puntos de la ruta al menos 1 m")
-            count = ceil(distance / max(terrain.sample_spacing_m, 10))
-            if count > 1000:
-                raise ValueError("Un tramo es demasiado largo para esta resolución")
+            # Long traverses remain analyzable. Bound work per leg and report
+            # the resulting interval so a coarser sample is never hidden.
+            count = min(ceil(distance / max(terrain.sample_spacing_m, 10)), 5000)
             hours = total_rise = max_grade = max_roughness = 0.0
             hazards = set()
             for index in range(count):
@@ -68,6 +68,7 @@ def analyze_route(payload, terrain):
             output.append({
                 "from": a, "to": b, "direction": direction,
                 "distance_m": round(distance, 1), "rise_m": round(total_rise, 1),
+                "sample_interval_m": round(distance / count, 1),
                 "max_grade_percent": round(max_grade * 100, 1),
                 "roughness_m": round(max_roughness, 1),
                 "time_min": round(hours * 60, 1), "hazards": sorted(hazards),

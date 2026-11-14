@@ -97,6 +97,13 @@ def plan_request(payload):
             visit["point"] = GALE.to_lonlat(*visit["point"])
         for leg in result["legs"]:
             leg["path"] = [GALE.to_lonlat(*point) for point in leg["path"]]
+        for trip in result.get("trips", []):
+            trip["arrival"] = GALE.to_lonlat(*trip["arrival"])
+            trip["route"] = [GALE.to_lonlat(*point) for point in trip["route"]]
+            for visit in trip["ordered_visits"]:
+                visit["point"] = GALE.to_lonlat(*visit["point"])
+            for leg in trip["legs"]:
+                leg["path"] = [GALE.to_lonlat(*point) for point in leg["path"]]
     result["map"] = map_id
     result["coordinates"] = ("Mars longitude/latitude, degrees east/north" if map_id == "gale"
                              else "Projected metres in the selected terrain")

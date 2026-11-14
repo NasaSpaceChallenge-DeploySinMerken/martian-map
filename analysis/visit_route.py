@@ -9,6 +9,7 @@ import os
 from return_route import shortest_return
 from route_cost import profile_path
 from consumption import oxygen_budget
+from split_route import split_visits_by_oxygen
 
 
 MAX_VISITS = 8
@@ -193,62 +194,116 @@ def plan_visit_route(arrival, visits, terrain, *, return_to_arrival=True,
         detail = f" Sin conexión encontrada desde el aterrizaje hasta: punto(s) {', '.join(missing)}." if missing else ""
         raise ValueError(f"No se encontró una ruta para todos los puntos con el límite de pendiente de {MAX_PLAN_SLOPE_DEGREES}°." + detail)
 
-    indices = [0] + order + ([0] if return_to_arrival else [])
-    route = [locations[0]]
-    for a, b in zip(indices, indices[1:]):
-        path = paths[a, b]
-        route.extend(path[1:])
+    def build_trip(visit_order, return_to_base):
+        indices = [0] + visit_order + ([0] if return_to_base else [])
+        route = [locations[0]]
+        for a, b in zip(indices, indices[1:]):
+            route.extend(paths[a, b][1:])
 
-    # A corridor between two chosen stops may pass an unvisited stop. Record
-    # that visit where it is first reached and split the route there.
-    encountered = []
-    boundaries = [(0, 0)]
-    for route_index, point in enumerate(route[1:], 1):
-        for visit_index in range(1, count):
-            if visit_index not in encountered and _distance(point, locations[visit_index]) < 1e-6:
-                encountered.append(visit_index)
-                boundaries.append((route_index, visit_index))
-    if len(encountered) != n:
-        raise ValueError("No se pudieron identificar todas las visitas en la ruta")
-    if return_to_arrival:
-        boundaries.append((len(route) - 1, 0))
+        # A corridor may pass another selected visit before its destination.
+        encountered = []
+        boundaries = [(0, 0)]
+        for route_index, point in enumerate(route[1:], 1):
+            for visit_index in visit_order:
+                if (visit_index not in encountered
+                        and _distance(point, locations[visit_index]) < 1e-6):
+                    encountered.append(visit_index)
+                    boundaries.append((route_index, visit_index))
+        if len(encountered) != len(visit_order):
+            raise ValueError("No se pudieron identificar todas las visitas en la ruta")
+        if return_to_base:
+            boundaries.append((len(route) - 1, 0))
 
-    legs = []
-    for (start_at, a), (end_at, b) in zip(boundaries, boundaries[1:]):
-        path = route[start_at:end_at + 1]
-        segments = profile_path(path, terrain, speed_kmh, "visita" if b else "regreso")
-        legs.append({
-            "from_index": None if a == 0 else a - 1,
-            "to_index": None if b == 0 else b - 1,
-            "path": path,
-            "distance_m": round(sum(segment["distance_m"] for segment in segments), 1),
-            "time_min": round(sum(segment["time_min"] for segment in segments), 1),
-            "oxygen_g": round(sum(segment["oxygen_g"] for segment in segments), 1),
-            "hazards": sorted({hazard for segment in segments for hazard in segment["hazards"]}),
-        })
-    travel_min = sum(leg["time_min"] for leg in legs)
-    stop_min = n * stop_minutes_per_visit
-    oxygen = oxygen_budget(
-        [{"oxygen_g": leg["oxygen_g"]} for leg in legs], stop_minutes=stop_min)
-    steep = any("pendiente fuerte" in leg["hazards"] for leg in legs)
+        legs = []
+        all_segments = []
+        for (start_at, a), (end_at, b) in zip(boundaries, boundaries[1:]):
+            path = route[start_at:end_at + 1]
+            segments = profile_path(path, terrain, speed_kmh, "visita" if b else "regreso")
+            all_segments.extend(segments)
+            legs.append({
+                "from_index": None if a == 0 else a - 1,
+                "to_index": None if b == 0 else b - 1,
+                "path": path,
+                "distance_m": round(sum(s["distance_m"] for s in segments), 1),
+                "time_min": round(sum(s["time_min"] for s in segments), 1),
+                "oxygen_g": round(sum(s["oxygen_g"] for s in segments), 1),
+                "hazards": sorted({h for s in segments for h in s["hazards"]}),
+            })
+        travel_min = sum(leg["time_min"] for leg in legs)
+        stop_min = len(visit_order) * stop_minutes_per_visit
+        return {
+            "arrival": locations[0],
+            "ordered_visits": [{"input_index": i - 1, "point": locations[i]}
+                               for i in encountered],
+            "route": route,
+            "legs": legs,
+            "summary": {
+                "distance_m": round(sum(leg["distance_m"] for leg in legs), 1),
+                "travel_time_min": round(travel_min, 1),
+                "stop_time_min": round(stop_min, 1),
+                "total_time_min": round(travel_min + stop_min, 1),
+                "oxygen": oxygen_budget(all_segments, stop_minutes=stop_min),
+            },
+        }
+
+    initial = build_trip(order, return_to_arrival)
+    if (return_to_arrival and not initial["summary"]["oxygen"]["enough_with_reserve"]):
+        orders = split_visits_by_oxygen(count, paths, distances, terrain, speed_kmh,
+                                        stop_minutes_per_visit)
+        trips = [build_trip(subset_order, True) for subset_order in orders]
+        if not all(trip["summary"]["oxygen"]["enough_with_reserve"] for trip in trips):
+            raise ValueError("No se encontró una división que conserve la reserva de oxígeno")
+    else:
+        trips = [initial]
+
+    if len(trips) == 1:
+        combined = trips[0]
+    else:
+        route = trips[0]["route"].copy()
+        visits_in_order = []
+        legs = []
+        for trip_index, trip in enumerate(trips):
+            trip["trip_index"] = trip_index
+            if trip_index:
+                route.extend(trip["route"][1:])
+            visits_in_order.extend({**visit, "trip_index": trip_index}
+                                   for visit in trip["ordered_visits"])
+            legs.extend({**leg, "trip_index": trip_index} for leg in trip["legs"])
+        oxygen = dict(trips[0]["summary"]["oxygen"])
+        for key in ("travel_g", "stops_g", "used_g"):
+            oxygen[key] = round(sum(trip["summary"]["oxygen"][key] for trip in trips), 1)
+        oxygen["remaining_g"] = None  # each refilled tank has its own remainder
+        oxygen["min_remaining_g"] = min(trip["summary"]["oxygen"]["remaining_g"]
+                                         for trip in trips)
+        oxygen["tank_refills"] = len(trips) - 1
+        oxygen["enough_with_reserve"] = True
+        travel_min = sum(trip["summary"]["travel_time_min"] for trip in trips)
+        stop_min = sum(trip["summary"]["stop_time_min"] for trip in trips)
+        combined = {
+            "arrival": locations[0],
+            "ordered_visits": visits_in_order,
+            "route": route,
+            "legs": legs,
+            "summary": {
+                "distance_m": round(sum(trip["summary"]["distance_m"] for trip in trips), 1),
+                "travel_time_min": round(travel_min, 1),
+                "stop_time_min": round(stop_min, 1),
+                "total_time_min": round(travel_min + stop_min, 1),
+                "oxygen": oxygen,
+            },
+            "trips": trips,
+        }
+
+    steep = any("pendiente fuerte" in leg["hazards"] for leg in combined["legs"])
     return {
+        **combined,
         "terrain_mode": terrain.mode,
-        "arrival": locations[0],
-        "ordered_visits": [{"input_index": index - 1, "point": locations[index]} for index in encountered],
         "return_to_arrival": return_to_arrival,
+        "trip_count": len(trips),
         "grade_limit_degrees": MAX_PLAN_SLOPE_DEGREES,
         "grade_limit_percent": round(MAX_PLAN_GRADE * 100, 1),
         "warning": ("Ruta exploratoria: incluye pendientes superiores al 25 %. "
                     "Revisa la viabilidad de esos tramos sobre el DEM."
                     if steep else None),
-        "route": route,
-        "legs": legs,
-        "summary": {
-            "distance_m": round(sum(leg["distance_m"] for leg in legs), 1),
-            "travel_time_min": round(travel_min, 1),
-            "stop_time_min": round(stop_min, 1),
-            "total_time_min": round(travel_min + stop_min, 1),
-            "oxygen": oxygen,
-        },
-        "method": "distancia mínima entre visitas sobre caminos transitables aproximados por malla A*",
+        "method": "caminos A*; mínimo de salidas con reserva, luego distancia total",
     }

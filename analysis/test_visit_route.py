@@ -43,12 +43,27 @@ class VisitRouteTests(unittest.TestCase):
         self.assertAlmostEqual(oxygen["used_g"], oxygen["travel_g"] + oxygen["stops_g"],
                                delta=0.1)
 
-    def test_budget_warns_when_tank_cannot_cover_route_and_reserve(self):
-        result = plan_visit_route([50, 50], [[900, 50]], FlatTerrain(),
-                                  speed_kmh=0.3, stop_minutes_per_visit=180)
-        oxygen = result["summary"]["oxygen"]
-        self.assertFalse(oxygen["enough_with_reserve"])
-        self.assertLess(oxygen["remaining_g"], oxygen["reserve_g"])
+    def test_unreachable_oxygen_budget_names_single_visit(self):
+        with self.assertRaisesRegex(ValueError, "punto\\(s\\) 1"):
+            plan_visit_route([50, 50], [[900, 50]], FlatTerrain(),
+                             speed_kmh=0.3, stop_minutes_per_visit=180)
+
+    def test_oxygen_shortfall_splits_into_base_to_base_sorties(self):
+        result = plan_visit_route([500, 500], [[0, 500], [1000, 500], [750, 500]],
+                                  FlatTerrain(), speed_kmh=0.3,
+                                  stop_minutes_per_visit=30)
+        self.assertEqual(result["trip_count"], 2)
+        self.assertEqual(len(result["trips"]), 2)
+        self.assertEqual(result["summary"]["distance_m"], 2000)
+        self.assertEqual([[visit["input_index"] for visit in trip["ordered_visits"]]
+                          for trip in result["trips"]], [[0], [1, 2]])
+        self.assertEqual({visit["input_index"] for trip in result["trips"]
+                          for visit in trip["ordered_visits"]}, {0, 1, 2})
+        for trip in result["trips"]:
+            self.assertEqual(trip["route"][0], [500.0, 500.0])
+            self.assertEqual(trip["route"][-1], [500.0, 500.0])
+            self.assertTrue(trip["summary"]["oxygen"]["enough_with_reserve"])
+        self.assertEqual(result["summary"]["oxygen"]["tank_refills"], 1)
 
     def test_steep_route_is_explicitly_flagged(self):
         class SteepNarrowTerrain:
@@ -142,6 +157,32 @@ class VisitRouteTests(unittest.TestCase):
         self.assertEqual(sent["data"]["route"][0], payload["arrival"])
         self.assertIn("oxygen_g", sent["data"]["legs"][0])
         self.assertIn("enough_with_reserve", sent["data"]["summary"]["oxygen"])
+
+    def test_gale_split_converts_every_trip_back_to_geographic_coordinates(self):
+        class GaleStub(FlatTerrain):
+            bounds = (0, 0, 2000, 2000)
+            geo_bounds = (0, 0, 1000, 1000)
+
+            def to_xy(self, lon, lat):
+                return [lon * 2, lat * 2]
+
+            def to_lonlat(self, x, y):
+                return [x / 2, y / 2]
+
+        payload = {"map": "gale", "arrival": [250, 250],
+                   "visits": [[0, 250], [500, 250], [375, 250]],
+                   "settings": {"speed_kmh": 0.3, "stop_minutes_per_visit": 30}}
+        with patch("server.GALE", GaleStub()):
+            result = plan_request(payload)
+        self.assertEqual(result["trip_count"], 2)
+        self.assertEqual(result["route"][0], payload["arrival"])
+        for trip in result["trips"]:
+            self.assertEqual(trip["arrival"], payload["arrival"])
+            self.assertEqual(trip["route"][0], payload["arrival"])
+            self.assertEqual(trip["route"][-1], payload["arrival"])
+        self.assertEqual({tuple(visit["point"]) for trip in result["trips"]
+                          for visit in trip["ordered_visits"]},
+                         {tuple(point) for point in payload["visits"]})
 
     def test_full_ctx_map_is_rejected_without_dem(self):
         with self.assertRaisesRegex(ValueError, "CTX completo"):

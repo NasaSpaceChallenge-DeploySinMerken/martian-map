@@ -8,36 +8,28 @@ import Point from 'ol/geom/Point';
 import { Style, Stroke, Circle as CircleStyle, Fill } from 'ol/style';
 import { transform } from 'ol/proj';
 import { MARS_LL, MARS_EQC } from './projection.js';
+import { LAYERS, DEM_RAMP, DEM_NODATA, CRS } from './catalog.js';
 
+// Los metadatos (título, visibilidad, opacidad, rampa) viven en catalog.js,
+// que comparte el servidor de la API: cambiar ahí cambia en ambos lados.
+const meta = Object.fromEntries(LAYERS.map((l) => [l.id, l]));
 const base = import.meta.env.BASE_URL;
-const url = (f) => `${base}data/${f}`;
+const url = (rel) => `${base}${rel}`;
 
-export const DEM_NODATA = -32768;
+// El rampa de OL va plano: [stop, color, stop, color, ...]
+const DEM_RAMP_FLAT = DEM_RAMP.flatMap(([stop, color]) => [stop, color]);
 
-// Rampa de elevación según las estadísticas reales del DEM recortado
-// (mín −4639 m, máx +359 m, media −3819 m). Bajo → azul, alto → blanco.
-const DEM_RAMP = [
-  'interpolate', ['linear'], ['band', 1],
-  -4600, [25, 55, 130, 1],
-  -4300, [45, 115, 145, 1],
-  -4000, [75, 165, 120, 1],
-  -3700, [155, 190, 110, 1],
-  -3400, [225, 215, 120, 1],
-  -3000, [235, 175, 95, 1],
-  -2400, [210, 125, 65, 1],
-  -1600, [185, 140, 120, 1],
-  -800, [225, 220, 215, 1],
-  0, [255, 255, 255, 1],
-  400, [255, 255, 255, 1],
-];
+export { DEM_NODATA };
 
 export function createLayers() {
   // Imagen base del cráter Gale (MRO CTX, 1 banda en gris -> R=G=B)
   const ctx = new WebGLTileLayer({
-    title: 'CTX mosaico (imagen)',
+    title: meta.ctx.title,
+    visible: meta.ctx.visible,
+    opacity: meta.ctx.opacity,
     source: new GeoTIFF({
-      sources: [{ url: url('ctx_cog.tif') }],
-      projection: 'MARS:EQC',
+      sources: [{ url: url(meta.ctx.url) }],
+      projection: CRS.projected,
       interpolate: true,
     }),
     style: { color: ['array', ['band', 1], ['band', 1], ['band', 1], 1] },
@@ -45,27 +37,30 @@ export function createLayers() {
 
   // Sombreado del relieve (gdaldem hillshade -multidirectional sobre el DEM)
   const hillshade = new WebGLTileLayer({
-    title: 'Sombreado del relieve',
-    opacity: 0.5,
-    visible: false,
+    title: meta.hillshade.title,
+    visible: meta.hillshade.visible,
+    opacity: meta.hillshade.opacity,
     source: new GeoTIFF({
-      sources: [{ url: url('hillshade_cog.tif'), nodata: 0 }],
-      projection: 'MARS:EQC',
+      sources: [{ url: url(meta.hillshade.url), nodata: meta.hillshade.nodata }],
+      projection: CRS.projected,
     }),
     style: { color: ['array', ['band', 1], ['band', 1], ['band', 1], 1] },
   });
 
   // Elevación (MRO HiRISE DEM): normalize:false -> la banda 1 son metros reales
   const dem = new WebGLTileLayer({
-    title: 'DEM HiRISE (elevación)',
-    opacity: 0.6,
+    title: meta.dem.title,
+    visible: meta.dem.visible,
+    opacity: meta.dem.opacity,
     source: new GeoTIFF({
-      sources: [{ url: url('dem_cog.tif'), nodata: DEM_NODATA }],
-      projection: 'MARS:EQC',
-      normalize: false,
+      sources: [{ url: url(meta.dem.url), nodata: meta.dem.nodata }],
+      projection: CRS.projected,
+      normalize: meta.dem.normalize === false ? false : undefined,
       interpolate: false,
     }),
-    style: { color: DEM_RAMP },
+    style: {
+      color: ['interpolate', ['linear'], ['band', 1], ...DEM_RAMP_FLAT],
+    },
   });
 
   return [ctx, hillshade, dem]; // el orden es de abajo hacia arriba

@@ -168,8 +168,8 @@ def step_hs():
                   target_grid()[2])
     log(f'hillshade: media={hs[valid].mean():.0f} (0-255)')
 
-    elev = np.where(valid, np.rint(dem), DEM_WEB_NODATA)
-    elev = np.clip(elev, -32767, 32767).astype(np.int16)
+    elev = np.clip(np.rint(dem), -32767, 32767)   # rango válido de int16 (los datos van de -4639 a 359)
+    elev = np.where(valid, elev, DEM_WEB_NODATA).astype(np.int16)  # nodata DESPUÉS del clip
     write_geotiff(os.path.join(WORK, 'dem_eqc_int16.tif'), elev, 'int16', DEM_WEB_NODATA, 2,
                   target_grid()[2])
     log('DEM Int16 web listo (metros enteros, nodata -32768)')

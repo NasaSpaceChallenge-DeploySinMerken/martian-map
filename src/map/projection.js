@@ -1,14 +1,10 @@
 import proj4 from 'proj4';
 import { register } from 'ol/proj/proj4';
 import { get as getProjection } from 'ol/proj';
+import { MARS_RADIUS, MARS_EQC_PROJ4, MARS_LL_PROJ4 } from './catalog.js';
 
-export const MARS_RADIUS = 3396190; // m, esfera Mars 2000
-
-proj4.defs('IAU:49900', `+proj=longlat +a=${MARS_RADIUS} +b=${MARS_RADIUS} +no_defs`);
-proj4.defs(
-  'MARS:EQC',
-  `+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +a=${MARS_RADIUS} +b=${MARS_RADIUS} +units=m +no_defs`
-);
+proj4.defs('IAU:49900', MARS_LL_PROJ4);   // grados lon/lat
+proj4.defs('MARS:EQC', MARS_EQC_PROJ4);   // metros
 register(proj4);
 
 export const MARS_LL = getProjection('IAU:49900');   // grados lon/lat

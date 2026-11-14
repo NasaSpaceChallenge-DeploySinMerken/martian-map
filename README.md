@@ -10,15 +10,44 @@ planificada y posición del astronauta.
 npm install
 npm run dev        # http://localhost:5173/martian-map/
 npm run build      # build de producción en dist/
+npm run api        # API en http://localhost:3000 (sirve dist/ si existe)
 ```
+
+## API: comunicación entre equipos
+
+`server/index.js` (`npm run api`) expone la API REST que conecta los tres
+equipos — contrato completo con ejemplos en [`docs/API.md`](docs/API.md):
+
+```
+Equipo 2 (front) → GET /api/space + /api/layers  (muestra la zona y las capas)
+Equipo 2 (front) → POST /api/routes {start, route}
+     nosotros validamos que todo esté en nuestro espacio (zona + dato de
+     elevación) → si va bien, lo enviamos al Equipo 3 (TEAM3_ANALYSIS_URL)
+Equipo 3 → POST /api/routes/:id/analysis (callback) o responde sincrónicamente
+Equipo 2 (front) → GET /api/routes/:id  (estado: validated → forwarded → analyzed)
+```
+
+- **Espacio**: zona cargada `lon 137.10–137.75, lat −4.95 – −4.22`; los puntos
+  fuera dan `422 OUT_OF_SPACE` y los que caen sin dato de elevación `422 NO_DATA`
+  (los segmentos se densifican cada ~250 m para detectar cruces de borde).
+- **Capas**: el catálogo vive en `src/map/catalog.js` (compartido por el mapa y
+  la API); para sumar una capa nueva (p. ej. temperatura) basta añadir su
+  entrada con su COG en `public/data/`.
+- Config: `PORT`, `MAP_ORIGIN`, `TEAM3_ANALYSIS_URL`, `PUBLIC_ORIGIN`
+  (ver tabla en `docs/API.md`). Sin `TEAM3_ANALYSIS_URL` las rutas quedan en
+  `validated` y se reenvían luego con `POST /api/routes/:id/forward`.
+- La elevación que devuelve la API se muestrea del mismo `dem_cog.tif` que el
+  mapa: valores idénticos a los del cursor.
 
 ## Estructura
 
 ```
 src/map/          ← nuestra parte (guía por fases)
+  catalog.js        metadatos compartidos: zona, capas, rampa, proyecciones
   projection.js     las dos proyecciones de Marte registradas en OL
   map.js            crea el Map + View (centrado en Bradbury, z14)
   layers.js         capas raster + ruta/astronauta + selector de capas
+server/index.js   API REST (espacio, capas, validación de rutas) → docs/API.md
 src/main.js       wiring: panel, lectura de coordenadas/elevación
 public/data/      COG listos para el navegador + route.geojson
 scripts/          preprocess_gale.py (original .tif → COG)

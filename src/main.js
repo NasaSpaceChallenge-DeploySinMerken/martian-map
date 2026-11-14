@@ -2,7 +2,8 @@ import 'ol/ol.css';
 import './style.css';
 import { transform } from 'ol/proj';
 import { createMap, BRADBURY } from './map/map.js';
-import { buildLayerSwitcher, setAstronautPosition, DEM_NODATA } from './map/layers.js';
+import { buildLayerSwitcher, setAstronautPosition } from './map/layers.js';
+import { DEM_VALID_MIN } from './map/catalog.js';
 import { MARS_LL, MARS_EQC } from './map/projection.js';
 
 const { map, layers } = createMap('map');
@@ -20,7 +21,7 @@ map.on('pointermove', (e) => {
   let h = '—';
   if (demLayer.getVisible()) {
     const v = demLayer.getData(e.pixel); // banda 1 = metros reales (normalize:false)
-    if (v && Number.isFinite(v[0]) && v[0] > DEM_NODATA) {
+    if (v && Number.isFinite(v[0]) && v[0] > DEM_VALID_MIN) {
       h = `${v[0].toFixed(0)} m`;
     }
   }

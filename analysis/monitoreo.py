@@ -170,6 +170,7 @@ class Sesion:
         self.ancla_t = None    # segundo en que empezo la quietud actual
         self.avance_prev = None
         self.gastado_g = 0.0
+        self.viaje_actual = None
 
     def lectura(self, t, p):
         """Procesa una lectura (t en segundos de la caminata, p en coordenadas planas)."""
@@ -178,6 +179,12 @@ class Sesion:
         ubicacion = ubicar(self.ruta, p, self.avance_prev)
         self.avance_prev = ubicacion["avance_m"]
         tramo = self.ruta["tramos"][ubicacion["tramo"]]
+        if self.viaje_actual is not None and tramo["viaje"] != self.viaje_actual:
+            # Cada salida nueva empieza con el tanque recargado en el aterrizaje.
+            self.gastado_g = 0.0
+            self.ancla = None
+            self.ancla_t = None
+        self.viaje_actual = tramo["viaje"]
 
         minutos = 0.0 if self.t_prev is None else (t - self.t_prev) / 60
 

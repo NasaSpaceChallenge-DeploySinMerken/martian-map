@@ -181,6 +181,7 @@ incluir visitas excluidas; no es un error:
 ```json
 {
   "map": "gale",
+  "idRuta": "4b889fa998d8",
   "coordinates": "lon/lat",
   "arrival": [137.44, -4.59],
   "ordered_visits": [{ "input_index": 0, "point": [137.45, -4.582] }],
@@ -340,9 +341,8 @@ Se llama **cada segundo** durante la caminata. El análisis calcula el oxígeno
 con su modelo (no usa el sensor del traje), ubica al astronauta en la ruta y
 devuelve las alertas activas.
 
-> **Por confirmar:** si esta llamada va directo al servidor de análisis o pasa
-> por el proxy `server/index.js` (ver `POST /api/plan`). Hoy se documenta como
-> llamada directa.
+La llamada pasa por `server/index.js`, que la reenvía a la misma VM privada de
+análisis que atendió `/plan`. El navegador usa el origen público del front.
 
 ### Pedido
 
@@ -363,6 +363,8 @@ devuelve las alertas activas.
   `{ "x", "y" }` en metros. Fuera de la cobertura del DEM responde `400`.
 - `sensores`: se aceptan pero **no se usan** por ahora. El oxígeno se calcula en
   el análisis. Temperatura y pulso se verán en la fase 2.
+- `reiniciar` (opcional): `true` inicia de nuevo la sesión de esa ruta; se usa al
+  reiniciar la caminata en la demo.
 
 ### Respuesta `200`
 

@@ -12,6 +12,7 @@
  *   GET  /api/space                  nuestra "zona" para que el front la muestre
  *   GET  /api/layers                 catálogo de capas disponibles (elevación, imagen, ...)
  *   POST /api/plan                   proxy transparente al POST /plan del Equipo 3
+ *   POST /api/monitoreo              seguimiento de la ruta en la VM de análisis
  *   POST /api/routes                 flujo anterior: validar inicio+ruta y registrarla
  *   GET  /api/routes                 lista de rutas registradas
  *   GET  /api/routes/:id             estado + resultado del análisis
@@ -60,6 +61,24 @@ const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || `http://localhost:${PORT}`;
 // endpoint (http://host:8000/plan). Si es la base, se le añade /plan.
 const ANALYSIS_URL = process.env.ANALYSIS_URL || null;
 const ANALYSIS_TIMEOUT_MS = Math.max(1000, Number(process.env.ANALYSIS_TIMEOUT_MS) || 60000);
+const ANALYSIS_MAX_CONCURRENT = Math.max(1, Number(process.env.ANALYSIS_MAX_CONCURRENT) || 2);
+let activeAnalysisRequests = 0;
+
+function reserveAnalysisSlot(req, res, next) {
+  if (activeAnalysisRequests >= ANALYSIS_MAX_CONCURRENT) {
+    return res.status(429).set('Retry-After', '5').json({ error: 'El análisis está ocupado; reintenta en unos segundos' });
+  }
+  activeAnalysisRequests += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeAnalysisRequests -= 1;
+  };
+  res.once('finish', release);
+  res.once('close', release);
+  next();
+}
 
 function resolvePlanUrl(raw) {
   if (!raw) return null;
@@ -76,6 +95,8 @@ function resolvePlanUrl(raw) {
 }
 
 const PLAN_URL = process.env.PLAN_URL || resolvePlanUrl(ANALYSIS_URL);
+const GALE_ANALYZE_URL = PLAN_URL ? new URL('/gale/analyze', PLAN_URL).toString() : null;
+const MONITOREO_URL = PLAN_URL ? new URL('/api/monitoreo', PLAN_URL).toString() : null;
 
 /**
  * Acepta el contrato del análisis ({map, arrival, visits, ...}) o el formato
@@ -319,6 +340,7 @@ app.get('/api/layers', (req, res) => {
       ...l,
       url: `${base}/${l.url}`,
       absoluteUrl: `${MAP_ORIGIN}${base}/${l.url}`,
+      ...(l.previewUrl ? { previewUrl: `${base}/${l.previewUrl}` } : {}),
     })),
   });
 });
@@ -326,7 +348,7 @@ app.get('/api/layers', (req, res) => {
 // Proxy transparente al Equipo 3: POST /plan (visitas sin orden previo).
 // No validamos rango ni nodata: el análisis decide qué visitas son viables y
 // devolvemos su respuesta (status y JSON) tal cual para que el front la use.
-app.post('/api/plan', async (req, res) => {
+app.post('/api/plan', reserveAnalysisSlot, async (req, res) => {
   if (!PLAN_URL) {
     return res.status(503).json({
       ok: false,
@@ -385,6 +407,46 @@ app.post('/api/plan', async (req, res) => {
         },
       ],
     });
+  }
+});
+
+// La sesión de monitoreo vive en la misma VM que creó idRuta en /plan.
+// Reenviamos sin transformar el cuerpo ni el status; el navegador no accede a la VM privada.
+app.post('/api/monitoreo', async (req, res) => {
+  if (!MONITOREO_URL) return res.status(503).json({ error: 'ANALYSIS_URL no está configurado' });
+  try {
+    const upstream = await fetch(MONITOREO_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req.body ?? {}),
+      signal: AbortSignal.timeout(10000),
+    });
+    const body = await upstream.text();
+    res.status(upstream.status).type(upstream.headers.get('content-type') || 'application/json').send(body);
+  } catch (error) {
+    const timeout = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+    res.status(timeout ? 504 : 502).json({ error: timeout ? 'El monitoreo excedió el tiempo de espera' : 'El análisis no está disponible' });
+  }
+});
+
+// La interfaz HTTPS consulta las métricas a través de este servicio. El
+// cálculo sigue ejecutándose únicamente en la VM dedicada de análisis.
+app.post('/gale/analyze', reserveAnalysisSlot, async (req, res) => {
+  if (!GALE_ANALYZE_URL) {
+    return res.status(503).json({ error: 'ANALYSIS_URL no está configurado' });
+  }
+  try {
+    const upstream = await fetch(GALE_ANALYZE_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req.body ?? {}),
+      signal: AbortSignal.timeout(ANALYSIS_TIMEOUT_MS),
+    });
+    const body = await upstream.text();
+    res.status(upstream.status).type(upstream.headers.get('content-type') || 'application/json').send(body);
+  } catch (error) {
+    const timeout = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+    res.status(timeout ? 504 : 502).json({ error: timeout ? 'El análisis excedió el tiempo de espera' : 'El análisis no está disponible' });
   }
 });
 

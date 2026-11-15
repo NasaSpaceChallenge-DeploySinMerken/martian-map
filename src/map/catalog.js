@@ -101,6 +101,7 @@ export const LAYERS = [
     title: 'THEMIS día IR (infrarrojo)',
     kind: 'thermal',
     url: 'data/themis_ir_cog.tif',
+    previewUrl: 'data/themis_ir_color.png', // mismo raster, falso color listo para la interfaz liviana
     bounds: ZONE_BOUNDS,
     resolution: 100,            // resolución nativa del THEMIS (no se remuestrea)
     dtype: 'uint8',

@@ -116,7 +116,7 @@ def monitorear(payload):
         else:
             p = (_numero(posicion.get("x"), "posicion.x"), _numero(posicion.get("y"), "posicion.y"))
         sesion = SESIONES.get(id_ruta)
-        if sesion is None:
+        if sesion is None or payload.get("reiniciar") is True:
             sesion = SESIONES[id_ruta] = Sesion(entrada["ruta"], entrada["velocidad_kmh"])
         lectura = sesion.lectura(t, p)
     return {"idRuta": id_ruta, **lectura}

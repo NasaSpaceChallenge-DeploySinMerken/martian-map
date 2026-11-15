@@ -190,6 +190,21 @@ class PrepararRutaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "tramos"):
             preparar_ruta({"return_to_arrival": True, "legs": []}, lambda p: p)
 
+    def test_new_sortie_starts_with_full_tank(self):
+        plan = {"return_to_arrival": True, "legs": [
+            {"path": [[0, 0], [100, 0]], "oxygen_g": 10, "time_min": 5, "trip_index": 0},
+            {"path": [[100, 0], [0, 0]], "oxygen_g": 10, "time_min": 5, "trip_index": 0},
+            {"path": [[0, 0], [0, 100]], "oxygen_g": 10, "time_min": 5, "trip_index": 1},
+            {"path": [[0, 100], [0, 0]], "oxygen_g": 10, "time_min": 5, "trip_index": 1},
+        ]}
+        sesion = Sesion(preparar_ruta(plan, lambda p: p))
+        sesion.lectura(0, (0, 0))
+        sesion.lectura(300, (100, 0))
+        sesion.lectura(600, (0, 0))
+        nueva = sesion.lectura(660, (0, 20))
+        self.assertLess(nueva["oxigenoGastadoG"], 5)
+        self.assertAlmostEqual(nueva["costoRegresoG"], 18, places=1)
+
 
 if __name__ == "__main__":
     unittest.main()

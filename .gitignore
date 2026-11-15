@@ -6,3 +6,5 @@ raw/
 !public/data/*.tif
 .DS_Store
 *.log
+__pycache__/
+deploy/gcp/*.zip

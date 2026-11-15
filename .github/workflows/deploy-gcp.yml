@@ -1,0 +1,66 @@
+name: Desplegar backend en GCP
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: gcp-backend-develop
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r analysis/requirements.txt
+      - run: python -m unittest discover -s analysis -p 'test_*.py'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: martian-map-javier-2026
+          workload_identity_provider: projects/712630786686/locations/global/workloadIdentityPools/github-deploy/providers/martian-map-develop
+          service_account: gha-martian-back@martian-map-javier-2026.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v3
+
+      - name: Desplegar capas y proxy privado
+        run: |
+          gcloud run deploy martian-layers \
+            --source . \
+            --build-service-account projects/martian-map-javier-2026/serviceAccounts/martian-build@martian-map-javier-2026.iam.gserviceaccount.com \
+            --project martian-map-javier-2026 \
+            --region southamerica-west1 \
+            --service-account martian-layers-runtime@martian-map-javier-2026.iam.gserviceaccount.com \
+            --network default --subnet default --vpc-egress private-ranges-only \
+            --update-env-vars ANALYSIS_URL=http://10.194.0.2:8000,MAP_ORIGIN=https://martian-map.page,PUBLIC_ORIGIN=https://martian-map.page \
+            --max-instances 1 --concurrency 80 --timeout 310 \
+            --memory 1Gi --cpu 1 --port 8080 --clear-base-image --quiet
+
+      - name: Publicar paquete de análisis para la VM
+        run: |
+          python deploy/gcp/package.py
+          gcloud storage cp deploy/gcp/analysis-release.zip \
+            gs://martian-map-javier-2026-releases/analysis-release.zip --quiet
+
+      - name: Verificar API y privacidad
+        run: |
+          curl --fail --silent --show-error https://martian-map.page/api/health >/dev/null
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            https://martian-layers-712630786686.southamerica-west1.run.app/api/health)
+          test "$status" = 403

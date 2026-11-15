@@ -1,0 +1,8 @@
+[Unit]
+Description=Instalar nueva versión del análisis marciano
+After=network-online.target martian-analysis.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/martian-analysis/update-analysis.sh

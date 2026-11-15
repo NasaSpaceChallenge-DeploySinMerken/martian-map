@@ -1,0 +1,11 @@
+[Unit]
+Description=Comprobar releases del análisis marciano
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=martian-analysis-update.service
+
+[Install]
+WantedBy=timers.target

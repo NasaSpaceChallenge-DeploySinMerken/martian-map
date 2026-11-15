@@ -1,0 +1,8 @@
+.git/
+.github/
+node_modules/
+dist/
+analysis/__pycache__/
+deploy/gcp/*.zip
+gha-creds-*.json
+*.log

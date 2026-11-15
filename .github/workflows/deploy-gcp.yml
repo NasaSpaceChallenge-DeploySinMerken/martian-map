@@ -43,6 +43,7 @@ jobs:
         run: |
           gcloud run deploy martian-layers \
             --source . \
+            --build-service-account projects/martian-map-javier-2026/serviceAccounts/martian-build@martian-map-javier-2026.iam.gserviceaccount.com \
             --project martian-map-javier-2026 \
             --region southamerica-west1 \
             --service-account martian-layers-runtime@martian-map-javier-2026.iam.gserviceaccount.com \

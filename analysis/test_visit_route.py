@@ -180,6 +180,16 @@ class VisitRouteTests(unittest.TestCase):
         self.assertEqual(result["unreachable_visits"][0]["reason"], "sin_camino_en_dem")
 
     def test_endpoint_dispatches_selected_map(self):
+        class GaleStub(FlatTerrain):
+            bounds = (0, 0, 1000, 1000)
+            geo_bounds = (137, -5, 138, -4)
+
+            def to_xy(self, lon, lat):
+                return [(lon - 137) * 1000, (lat + 5) * 1000]
+
+            def to_lonlat(self, x, y):
+                return [x / 1000 + 137, y / 1000 - 5]
+
         payload = {"map": "gale", "arrival": [137.44, -4.59],
                    "visits": [[137.445, -4.588]], "return_to_arrival": False}
         body = json.dumps(payload).encode()
@@ -190,7 +200,8 @@ class VisitRouteTests(unittest.TestCase):
         sent = {}
         handler.send_data = lambda status, data, content_type="application/json; charset=utf-8": sent.update(
             status=status, data=data)
-        handler.do_POST()
+        with patch("server.GALE", GaleStub()):
+            handler.do_POST()
         self.assertEqual(sent["status"], 200)
         self.assertEqual(sent["data"]["map"], "gale")
         self.assertEqual(sent["data"]["route"][0], payload["arrival"])

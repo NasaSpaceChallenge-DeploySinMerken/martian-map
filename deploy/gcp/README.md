@@ -14,6 +14,8 @@ proveedor acepta solo el ID del repositorio `1457833814` y `refs/heads/develop`.
 No se usan claves JSON. La cuenta de CI puede desplegar Cloud Run y escribir en
 el bucket de releases; no tiene escritura en el bucket del DEM. Cloud Run usa la
 cuenta de ejecución `martian-layers-runtime` y sigue requiriendo autenticación.
+Ambos repos usan `martian-build` para Cloud Build, separado de sus cuentas de
+ejecución y de la cuenta predeterminada de Compute Engine.
 
 Para comprobar la VM:
 
